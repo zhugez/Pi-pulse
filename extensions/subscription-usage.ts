@@ -2,8 +2,8 @@
  * Subscription usage extension.
  *
  * Shows usage for the active subscription-backed provider as a minimal
- * footer status line, directly below pi's model/thinking indicator (the
- * footer already names the provider, so no prefix is repeated):
+ * width-aware widget below the editor. Wide terminals show bars; narrow
+ * terminals use percentages and wrap rather than dropping quota windows:
  *
  *   ↑1k ↓2k $0.123 12.5%/200k (auto)      kimi-k2 • high
  *   R: ░░░░░░ 4% ~4h · W: ██████ 97% ~8h · M: █████░░░ 62% ~20d
@@ -44,6 +44,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createUsageCache } from "./subscription-usage/cache.ts";
 import {
 	asRecord,
@@ -217,6 +218,7 @@ interface StatusCtx {
 	modelRegistry?: ExtensionContext["modelRegistry"];
 	ui: {
 		setStatus(key: string, text: string | undefined): void;
+		setWidget?: ExtensionContext["ui"]["setWidget"];
 		theme: { fg(color: string, text: string): string };
 	};
 }
@@ -1414,8 +1416,40 @@ export default function (pi: ExtensionAPI) {
 			if (activeProvider !== providerId) return;
 		}
 		try {
-			// Footer status line, directly below the model/thinking indicator.
-			ui.setStatus(providerId, text);
+			// Older/headless UI adapters may expose only setStatus.
+			if (!ui.setWidget) {
+				ui.setStatus(providerId, text);
+				return;
+			}
+			ui.setStatus(providerId, undefined);
+			const widgetKey = `subscription-usage:${providerId}`;
+			if (text === undefined) {
+				ui.setWidget(widgetKey, undefined, { placement: "belowEditor" });
+				return;
+			}
+			ui.setWidget(widgetKey, (_tui, theme) => ({
+				invalidate() {},
+				render(width: number): string[] {
+					if (width < 1 || mode === "off") return [];
+					const model = currentCtx ? safeModel(currentCtx) : undefined;
+					if (model?.provider !== providerId) return [];
+					const cfg = cfgs.find((c) => c.id === providerId);
+					const state = cache.get(providerId);
+					if (!cfg || !state?.lastData) return wrapTextWithAnsi(text, width);
+					const data = state.lastData;
+					const render = (style: UsageStyle) => {
+						const value = cfg.render(data, theme, model.id, style);
+						return state.failStreak > 0 ? theme.fg("warning", `${value} ⚠`) : value;
+					};
+					const full = render(mode);
+					if (visibleWidth(full) <= width) return [full];
+					let compact = render("percent");
+					if (data.plan === "codex-lb") {
+						compact = `Used: ${compact.replace(/ used(?= )/g, "")}`;
+					}
+					return wrapTextWithAnsi(compact, width);
+				},
+			}), { placement: "belowEditor" });
 		} catch {
 			// The session can be replaced between safeUi() and this write.
 		}

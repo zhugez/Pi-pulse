@@ -25,6 +25,8 @@ Supported providers:
 - DeepSeek API: account balance and local peak/off-peak timing
 - codex-lb custom providers: effective API-key/pool limits from `/v1/usage`
 
+Usage appears in its own responsive strip below the editor, separate from the throughput footer. Wide terminals retain progress bars; narrow terminals switch to percentages and wrap without dropping quota windows or reset countdowns. Resizing back restores your selected style automatically.
+
 The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. Built-in providers share a disk cache; custom codex-lb quotas stay session-local so identical provider names on different hosts/accounts cannot share quota data.
 
 Commands:

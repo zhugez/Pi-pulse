@@ -6,8 +6,10 @@
 `extensions/deferred-extension.ts`. The package manifest separately loads the
 bundled Antigravity and Ponytail dependencies. Keep these entry paths stable.
 
-`extensions/subscription-usage.ts` owns provider requests, footer rendering,
-commands, and session scheduling. Its existing named exports remain available
+`extensions/subscription-usage.ts` owns provider requests, the responsive usage
+widget below the editor, commands, and session scheduling. The widget measures
+terminal columns on each render, falls back from bars to percentages when narrow,
+and wraps instead of truncating. Throughput remains in Pi's native footer. Its existing named exports remain available
 for compatibility. `extensions/live-throughput-status.ts` owns streaming
 measurements and their presentation independently.
 

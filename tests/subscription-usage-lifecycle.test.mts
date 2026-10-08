@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test, { type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import subscriptionUsage, {
 	antigravityCfg,
 	codexCfg,
@@ -103,6 +104,60 @@ test("configured codex-lb provider uses its own URL/auth and default refresh sta
 	await h.event("model_select");
 	assert.equal(h.statuses.get("macmini-codex"), undefined);
 	assert.equal(h.fetch.mock.callCount(), 1);
+});
+
+test("usage widget reflows on resize without losing quota or sharing the throughput line", async (t) => {
+	const h = harness(t);
+	let widget: Component | undefined;
+	const currentWidget = (): Component | undefined => widget;
+	h.ctx.ui.theme.fg = (_color: string, text: string) => `\x1b[33m${text}\x1b[0m`;
+	Object.assign(h.ctx.ui, {
+		setWidget(_key: string, factory: Parameters<ExtensionContext["ui"]["setWidget"]>[1], options: unknown) {
+			assert.deepEqual(options, { placement: "belowEditor" });
+			widget = typeof factory === "function"
+				? factory({} as never, h.ctx.ui.theme) : undefined;
+		},
+	});
+	h.fetch.mock.mockImplementation(async () => ({
+		windows: { "Pool 5h used": 0, "Pool W used": 11, "Limit 5h used": 2, "Limit W used": 34 },
+		resets: { "Limit 5h used": Date.now() + 4 * 3600_000 },
+		plan: "codex-lb",
+	}));
+	await h.event("session_start");
+	assert.ok(widget, "usage should use a width-aware widget, not a truncated footer status");
+	assert.equal(h.statuses.get("openai-codex"), undefined);
+	assert.match(widget.render(200).join("\n"), /░/);
+	for (const width of [100, 80, 60, 40, 20, 10, 1]) {
+		const lines = widget.render(width);
+		assert.ok(lines.every((line) => visibleWidth(line) <= width), `overflow at ${width}`);
+		if (width >= 20) {
+			const text = lines.join(" ");
+			for (const percent of ["0%", "11%", "2%", "34%"]) assert.ok(text.includes(percent), text);
+			assert.match(text, /Pool/);
+			assert.match(text, /Limit/);
+			assert.match(text, /~4h/);
+			assert.doesNotMatch(text, /░|█|\.\.\./);
+		}
+	}
+	assert.match(widget.render(200).join("\n"), /░/, "bars return when widened");
+	await h.commands.get("usage")!.handler("toggle off", h.ctx);
+	assert.equal(widget, undefined);
+	await h.commands.get("usage")!.handler("toggle bars", h.ctx);
+	await flush();
+	assert.ok(currentWidget());
+	h.fetch.mock.mockImplementation(async () => { throw new Error("temporary outage"); });
+	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	const restored = currentWidget();
+	assert.ok(restored);
+	assert.match(restored.render(60).join(" "), /⚠/);
+	h.ctx.ui.theme.fg = (_color: string, text: string) => text;
+	restored.invalidate();
+	assert.doesNotMatch(restored.render(60).join(" "), /\x1b/, "theme is recomputed, not cached");
+	h.ctx.model = { provider: "unconfigured", id: "other" } as typeof h.ctx.model;
+	await h.event("model_select");
+	assert.equal(widget, undefined);
+	await h.event("session_shutdown");
+	assert.equal(widget, undefined);
 });
 
 test("unknown active provider is not probed and default refresh does not query saved accounts", async (t) => {

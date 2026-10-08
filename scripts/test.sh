@@ -4,6 +4,7 @@ set -euo pipefail
 check_dir="$(mktemp -d "${TMPDIR:-/tmp}/pi-pulse-test.XXXXXX")"
 trap 'rm -rf "$check_dir"' EXIT
 printf '{"type":"module"}\n' >"$check_dir/package.json"
+ln -s "$PWD/node_modules" "$check_dir/node_modules"
 
 ./node_modules/.bin/tsc \
   --ignoreConfig \
