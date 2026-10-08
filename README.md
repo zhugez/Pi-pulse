@@ -23,16 +23,34 @@ Supported providers:
 - Antigravity Pro: Gemini and third-party model quota windows
 - OpenCode Go: rolling, weekly, and monthly limits
 - DeepSeek API: account balance and local peak/off-peak timing
+- codex-lb custom providers: effective API-key/pool limits from `/v1/usage`
 
-The extension uses a shared cache, refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries temporary failures with exponential backoff.
+The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. Built-in providers share a disk cache; custom codex-lb quotas stay session-local so identical provider names on different hosts/accounts cannot share quota data.
 
 Commands:
 
 ```text
 /usage
 /usage toggle [bars|percent|off]
-/usage refresh [all|active|<provider>]
+/usage refresh [active|<provider>|all]
 ```
+
+`/usage refresh` defaults to the **active provider**, not unrelated saved accounts. Use `/usage refresh all` explicitly to check every configured usage provider. API failures include the server's reason and credential/permission guidance; missing credentials are reported separately.
+
+#### codex-lb setup
+
+Add the provider IDs to `~/.pi/agent/subscription-usage-prefs.json` (preserve any existing preferences), then reload Pi:
+
+```json
+{
+  "mode": "bars",
+  "codexLbProviders": ["macmini-codex"]
+}
+```
+
+The IDs must match providers already configured in Pi. No key or URL duplication is needed: Pi resolves the selected model's base URL, API key, and headers at request time, including environment variables and credential commands. The base URL must end in `/v1` (proxy path prefixes are preserved); usage is fetched from the same URL plus `/usage`, without following redirects. Only explicitly listed providers are queried—an OpenAI-compatible API alone does not imply codex-lb support.
+
+Percentages are labeled explicitly and rounded to one decimal: **Pool 5h/W used** is `100 - account_pool_usage.primary/secondary` (the API reports remaining capacity); **Limit … used** is `limits.current_value / limits.max_value × 100`. These are different metrics, not interchangeable. Pool capacity is scoped to accounts assigned to the API key and may differ from a dashboard showing all accounts. Pool data carries no reset timestamp, so only limits show reset countdowns. Key-specific limits take precedence as supplied by codex-lb; different units and model filters remain separately labeled. Null/hidden pool values are omitted, not treated as zero. `/api/codex/usage` is not used because it can return `rate_limit: null` for a valid API key. If neither pool nor limit data is available, an explicit diagnostic is shown.
 
 ### Live throughput
 
@@ -123,7 +141,7 @@ npm run check
 
 ## Security and privacy
 
-Pi extensions execute with the same operating-system permissions as Pi. The usage extension reads relevant credentials from environment variables or `~/.pi/agent/auth.json` and sends them only to the corresponding provider quota/balance endpoints. Review the source before installation.
+Pi extensions execute with the same operating-system permissions as Pi. The usage extension reads built-in provider credentials from environment variables or `~/.pi/agent/auth.json`. Opted-in codex-lb providers use Pi's resolved model credentials and headers. Requests go only to the corresponding quota/balance endpoints; codex-lb requests reject redirects. Review the source before installation.
 
 Runtime state is stored under `~/.pi/agent/`:
 

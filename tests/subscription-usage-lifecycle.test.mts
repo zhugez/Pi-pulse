@@ -16,11 +16,11 @@ async function flush() {
 	for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
-function harness(t: TestContext, mode = "bars") {
+function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = []) {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_800_000_000_000 });
 	t.mock.method(Math, "random", () => 0.5);
 	t.mock.method(console, "error", () => {});
-	t.mock.method(fs, "readFileSync", () => JSON.stringify({ mode }));
+	t.mock.method(fs, "readFileSync", () => JSON.stringify({ mode, codexLbProviders }));
 	t.mock.method(fs.promises, "readFile", async () => "{}");
 	t.mock.method(fs.promises, "mkdir", async () => undefined);
 	t.mock.method(fs.promises, "writeFile", async () => {});
@@ -65,6 +65,71 @@ function harness(t: TestContext, mode = "bars") {
 		get watchListener() { return watchListener; },
 	};
 }
+
+test("configured codex-lb provider uses its own URL/auth and default refresh stays active-only", async (t) => {
+	const h = harness(t, "bars", ["macmini-codex"]);
+	const model = { provider: "macmini-codex", id: "gpt-6-astra", baseUrl: "http://macmini:2455/v1" };
+	h.ctx.model = model as typeof h.ctx.model;
+	const auth = t.mock.fn(async () => ({ ok: true, apiKey: "lb-test-key", headers: { "X-Proxy": "test" } }));
+	h.ctx.modelRegistry = { getAll: () => [model], getApiKeyAndHeaders: auth } as unknown as typeof h.ctx.modelRegistry;
+	const http = t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+		limits: [
+			{ limit_type: "credits", limit_window: "5h", max_value: 900, current_value: 83, reset_at: "2027-01-01T00:00:00Z" },
+			{ limit_type: "credits", limit_window: "7d", max_value: 30240, current_value: 2873 },
+		], account_pool_usage: { primary: 90.75, secondary: 90.5 },
+	})));
+	const notify = t.mock.method(h.ctx.ui, "notify");
+	await h.event("session_start");
+	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	assert.equal(String(http.mock.calls.at(-1)!.arguments[0]), "http://macmini:2455/v1/usage");
+	const options = http.mock.calls.at(-1)!.arguments[1];
+	assert.equal(new Headers(options?.headers).get("Authorization"), "Bearer lb-test-key");
+	assert.equal(new Headers(options?.headers).get("X-Proxy"), "test");
+	assert.equal(options?.redirect, "error");
+	assert.match(h.statuses.get("macmini-codex")!, /Pool 5h used:.*9\.3%.*Pool W used:.*9\.5%.*Limit 5h used:.*9\.2%/);
+	assert.match(notify.mock.calls.at(-1)!.arguments[0], /Usage refreshed for macmini-codex/);
+	assert.equal(h.fetch.mock.callCount(), 0);
+	assert.equal(h.providerFetches.antigravity.mock.callCount(), 0);
+	assert.equal(h.watch.mock.callCount(), 0);
+	await h.commands.get("usage")!.handler("toggle percent", h.ctx);
+	const write = t.mock.method(fs.promises, "writeFile", async (_path: unknown, data: unknown) => {
+		assert.deepEqual(JSON.parse(String(data)), { mode: "off", codexLbProviders: ["macmini-codex"] });
+	});
+	await h.commands.get("usage")!.handler("toggle off", h.ctx);
+	assert.equal(write.mock.callCount(), 1);
+	write.mock.restore();
+	await h.commands.get("usage")!.handler("toggle bars", h.ctx);
+	h.ctx.model = { provider: "openai-codex", id: "gpt-5" } as typeof h.ctx.model;
+	await h.event("model_select");
+	assert.equal(h.statuses.get("macmini-codex"), undefined);
+	assert.equal(h.fetch.mock.callCount(), 1);
+});
+
+test("unknown active provider is not probed and default refresh does not query saved accounts", async (t) => {
+	const h = harness(t);
+	h.ctx.model = { provider: "custom-not-opted-in", id: "gpt" } as typeof h.ctx.model;
+	const notify = t.mock.method(h.ctx.ui, "notify");
+	const http = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not fetch"); });
+	await h.event("session_start");
+	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	assert.match(notify.mock.calls.at(-1)!.arguments[0], /not configured.*custom-not-opted-in/);
+	assert.equal(http.mock.callCount(), 0);
+	for (const fetch of Object.values(h.providerFetches)) assert.equal(fetch.mock.callCount(), 0);
+});
+
+test("refresh notices expose failure details and clear them after recovery", async (t) => {
+	const h = harness(t);
+	const notify = t.mock.method(h.ctx.ui, "notify");
+	h.fetch.mock.mockImplementation(async () => { throw new Error("HTTP 401: token_revoked; use /login for openai-codex"); });
+	await h.event("session_start");
+	for (const target of ["active", "all"]) {
+		await h.commands.get("usage")!.handler(`refresh ${target}`, h.ctx);
+		assert.match(notify.mock.calls.at(-1)!.arguments[0], /token_revoked; use \/login for openai-codex/);
+	}
+	h.fetch.mock.mockImplementation(async () => ({ windows: { "5h": 12 } }));
+	await h.commands.get("usage")!.handler("refresh active", h.ctx);
+	assert.equal(notify.mock.calls.at(-1)!.arguments[0], "Usage refreshed for openai-codex");
+});
 
 test("usage watcher starts only with a session and shutdown removes only its listener", async (t) => {
 	const h = harness(t);
@@ -188,16 +253,15 @@ test("/usage toggle cycles footer style", async (t) => {
 	assert.match(notices.at(-1)!, /Subscription usage style: bars/);
 });
 
-test("/usage refresh force-fetches every provider by default", async (t) => {
+test("/usage refresh all force-fetches every provider explicitly", async (t) => {
 	const h = harness(t);
 	await h.event("session_start");
 	assert.equal(h.fetch.mock.callCount(), 1);
 	const notices: string[] = [];
 	(h.ctx.ui as unknown as { notify: (msg: string) => void }).notify = (msg: string) => notices.push(msg);
-	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	await h.commands.get("usage")!.handler("refresh all", h.ctx);
 	await flush();
-	// Session start fetched the active provider only; the default refresh
-	// fans out to every configured provider.
+	// Session start fetched the active provider only; explicit all fans out.
 	assert.equal(h.fetch.mock.callCount(), 2);
 	for (const [id, mocked] of Object.entries(h.providerFetches)) {
 		if (id === "openai-codex") continue;
@@ -252,7 +316,7 @@ test("/usage refresh with an unknown target warns without any request", async (t
 test("fan-out refresh writes a footer status for the active provider only", async (t) => {
 	const h = harness(t);
 	await h.event("session_start");
-	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	await h.commands.get("usage")!.handler("refresh all", h.ctx);
 	await flush();
 	// Providers we are not using must not leak status widgets into the footer.
 	for (const cfg of usageProviderCfgs) {
@@ -270,7 +334,7 @@ test("a provider without credentials is reported as skipped, not failed", async 
 	});
 	const notices: string[] = [];
 	(h.ctx.ui as unknown as { notify: (msg: string) => void }).notify = (msg: string) => notices.push(msg);
-	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	await h.commands.get("usage")!.handler("refresh all", h.ctx);
 	await flush();
 	assert.match(notices.at(-1)!, /no credentials: deepseek/);
 	assert.doesNotMatch(notices.at(-1)!, /failed:/);
@@ -284,7 +348,7 @@ test("a provider whose fetch rejects is reported as failed", async (t) => {
 	});
 	const notices: string[] = [];
 	(h.ctx.ui as unknown as { notify: (msg: string) => void }).notify = (msg: string) => notices.push(msg);
-	await h.commands.get("usage")!.handler("refresh", h.ctx);
+	await h.commands.get("usage")!.handler("refresh all", h.ctx);
 	await flush();
 	assert.match(notices.at(-1)!, /failed: deepseek/);
 });

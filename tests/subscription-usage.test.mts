@@ -624,9 +624,10 @@ test("earliestReset falls back to standard interval if expired reset was already
 	assert.equal(earliest, now - 10_000);
 });
 
-test("resolveRefreshTargets defaults to every provider and honours narrowing", () => {
+test("resolveRefreshTargets defaults to active and requires explicit all", () => {
 	const all = usageProviderCfgs.map((c) => c.id);
-	assert.deepEqual(resolveRefreshTargets("", usageProviderCfgs)?.map((c) => c.id), all);
+	assert.deepEqual(resolveRefreshTargets("", usageProviderCfgs, "openai-codex")?.map((c) => c.id), ["openai-codex"]);
+	assert.equal(resolveRefreshTargets("", usageProviderCfgs, "unsupported"), undefined);
 	assert.deepEqual(resolveRefreshTargets("  ALL  ", usageProviderCfgs)?.map((c) => c.id), all);
 	assert.deepEqual(
 		resolveRefreshTargets("active", usageProviderCfgs, "openai-codex")?.map((c) => c.id),

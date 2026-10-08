@@ -16,8 +16,8 @@
  * hidden (or jumps straight to the given mode); the choice persists in
  * ~/.pi/agent/subscription-usage-prefs.json.
  *
- * `/usage refresh [all|<provider>|active]` force-refetches every usage
- * provider (the default) or just one, bypassing the cooldown guards.
+ * `/usage refresh [active|<provider>|all]` force-refetches the active provider
+ * by default; `all` explicitly checks every configured usage provider.
  *
  * Each window also shows a compact countdown (~) until it resets. OpenCode
  * reports `resetsAt` (ISO) per window; Codex reports `reset_at` (epoch s);
@@ -35,17 +35,19 @@
  *   (20s → 30min) on API failures, and jitters ±20% so timers don't sync
  *   across sessions.
  *
- * API keys resolve from env first, then stored credentials in auth.json.
- * The Codex endpoint requires a browser User-Agent to pass Cloudflare.
+ * Built-in API keys resolve from env first, then auth.json. Opted-in codex-lb
+ * providers use Pi's model registry for their own URL, credentials and headers.
+ * The direct Codex endpoint requires a browser User-Agent to pass Cloudflare.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createUsageCache } from "./subscription-usage/cache.ts";
 import {
 	asRecord,
+	finiteNumber,
 	normalizePercent,
 	normalizeUsageData,
 	type UsageBalance,
@@ -143,12 +145,18 @@ export function normalizeUsageMode(value: unknown): UsageMode | undefined {
 
 export interface UsagePrefs {
 	mode: UsageMode;
+	/** Explicit opt-in: never probe arbitrary OpenAI-compatible providers. */
+	codexLbProviders?: string[];
 }
 
 /** Validate a parsed prefs file, falling back to defaults on anything odd. */
 export function normalizePrefs(value: unknown): UsagePrefs {
 	const record = asRecord(value);
+	const codexLbProviders = Array.isArray(record?.codexLbProviders)
+		? [...new Set(record.codexLbProviders.filter((id): id is string => typeof id === "string" && /^[a-zA-Z0-9_.-]+$/.test(id)))]
+		: [];
 	return {
+		...(codexLbProviders.length ? { codexLbProviders } : {}),
 		mode:
 			normalizeUsageMode(record?.mode) ??
 			// Legacy pref files wrote { style } before the cycle toggle existed.
@@ -182,7 +190,8 @@ async function savePrefs(prefs: UsagePrefs): Promise<void> {
 
 interface ProviderCfg {
 	id: string;
-	fetchUsage: (signal?: AbortSignal) => Promise<UsageData>;
+	fetchUsage: (signal?: AbortSignal, ctx?: StatusCtx) => Promise<UsageData>;
+	sharedCache?: boolean;
 	render: (
 		data: UsageData,
 		theme: { fg(color: string, text: string): string },
@@ -200,10 +209,12 @@ export type RefreshOutcome = "fetched" | "cached" | "skipped" | "failed";
 export interface RefreshResult {
 	id: string;
 	outcome: RefreshOutcome;
+	error?: string;
 }
 
 interface StatusCtx {
-	model?: { provider?: string; id?: string };
+	model?: ExtensionContext["model"];
+	modelRegistry?: ExtensionContext["modelRegistry"];
 	ui: {
 		setStatus(key: string, text: string | undefined): void;
 		theme: { fg(color: string, text: string): string };
@@ -212,6 +223,7 @@ interface StatusCtx {
 
 /** Per-provider scheduler state: timers, backoff counter, cached results. */
 interface ProviderState {
+	lastError?: string;
 	lastFetch: number; // when we last successfully retrieved fresh data from API/cache
 	lastAttempt: number; // when we last attempted a fetch
 	lastText: string | undefined;
@@ -651,6 +663,33 @@ function anySignal(a?: AbortSignal, b?: AbortSignal): AbortSignal {
 	return AbortSignal.any([a, b]);
 }
 
+/** Read only public error fields, never dump response bodies or credentials. */
+async function usageHttpError(res: Response, provider: string, secrets: string[]): Promise<Error> {
+	let detail = "";
+	try {
+		const json = asRecord(await res.json());
+		const error = asRecord(json?.error);
+		detail = [...new Set([
+			error?.status, error?.code, error?.message,
+			typeof json?.error === "string" ? json.error : undefined,
+			json?.error_description, json?.message,
+		].filter((value): value is string => typeof value === "string"))].join(": ");
+		for (const secret of secrets) {
+			if (secret) detail = detail.replaceAll(secret, "[REDACTED]");
+		}
+		// API text is untrusted terminal output; strip control characters.
+		detail = detail.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 400);
+	} catch {
+		// HTML gateways, empty bodies, and unreadable responses still have a status.
+	}
+	const hint = res.status === 401 || res.status === 403 || /invalid_grant/.test(detail)
+		? provider === "openai-codex" || provider === "antigravity"
+			? `; use /login for ${provider} or replace the environment token${res.status === 403 ? "; check account permissions/license if it persists" : ""}`
+			: "; check API key credentials and account permissions"
+		: "";
+	return new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ""}${hint}`);
+}
+
 export const opencodeCfg: ProviderCfg = {
 	id: "opencode-go",
 	async fetchUsage(signal?: AbortSignal) {
@@ -666,10 +705,7 @@ export const opencodeCfg: ProviderCfg = {
 			headers: { Authorization: `Bearer ${key}` },
 			signal: anySignal(signal, AbortSignal.timeout(10_000)),
 		});
-		if (!res.ok) {
-			await res.body?.cancel().catch(() => undefined);
-			throw new Error(`HTTP ${res.status}`);
-		}
+		if (!res.ok) throw await usageHttpError(res, "opencode-go", [key]);
 		const json = (await res.json()) as {
 			usage?: Record<
 				string,
@@ -740,10 +776,7 @@ export const deepseekCfg: ProviderCfg = {
 			headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
 			signal: anySignal(signal, AbortSignal.timeout(10_000)),
 		});
-		if (!res.ok) {
-			await res.body?.cancel().catch(() => undefined);
-			throw new Error(`HTTP ${res.status}`);
-		}
+		if (!res.ok) throw await usageHttpError(res, "deepseek", [key]);
 		const json = (await res.json()) as {
 			balance_infos?: Array<{ currency?: unknown; total_balance?: unknown }>;
 		};
@@ -874,10 +907,7 @@ export const codexCfg: ProviderCfg = {
 			},
 			signal: anySignal(signal, AbortSignal.timeout(10_000)),
 		});
-		if (!res.ok) {
-			await res.body?.cancel().catch(() => undefined);
-			throw new Error(`HTTP ${res.status}`);
-		}
+		if (!res.ok) throw await usageHttpError(res, "openai-codex", [access]);
 		const json = (await res.json()) as CodexUsageResponse;
 		return parseCodexUsage(json);
 	},
@@ -911,6 +941,83 @@ export const codexCfg: ProviderCfg = {
 		return joinParts(parts, theme);
 	},
 };
+
+/** codex-lb /v1/usage reports used credits, not account_pool_usage's remaining %. */
+export function parseCodexLbUsage(value: unknown): UsageData {
+	const json = asRecord(value);
+	const windows: Record<string, number> = {};
+	const resets: Record<string, number> = {};
+	const pool = asRecord(json?.account_pool_usage);
+	for (const [field, label] of [["primary", "5h"], ["secondary", "W"]] as const) {
+		const remaining = finiteNumber(pool?.[field]);
+		if (remaining !== undefined && remaining >= 0 && remaining <= 100) {
+			windows[`Pool ${label} used`] = Math.round((100 - remaining + Number.EPSILON) * 10) / 10;
+		}
+	}
+	const limits = Array.isArray(json?.limits) ? json.limits : [];
+	for (const item of limits) {
+		const limit = asRecord(item);
+		const max = finiteNumber(limit?.max_value);
+		const used = finiteNumber(limit?.current_value);
+		if (max === undefined || max <= 0 || used === undefined || used < 0) continue;
+		const period = limit?.limit_window;
+		const kind = limit?.limit_type;
+		if (typeof period !== "string" || !/^[a-zA-Z0-9_-]+$/.test(period)) continue;
+		if (typeof kind !== "string" || !/^[a-zA-Z0-9_-]+$/.test(kind)) continue;
+		const model = typeof limit?.model_filter === "string"
+			? limit.model_filter.replace(/[^a-zA-Z0-9_.:/-]/g, "_").slice(0, 100) : "";
+		const key = `Limit ${period === "7d" ? "W" : period}${kind === "credits" ? "" : ` ${kind}`}${model ? ` (${model})` : ""} used`;
+		windows[key] = Math.round(Math.min(100, used / max * 100) * 10) / 10;
+		const reset = typeof limit?.reset_at === "string" ? Date.parse(limit.reset_at) : NaN;
+		if (Number.isFinite(reset) && reset >= 0) resets[key] = reset;
+	}
+	if (!Object.keys(windows).length) throw new Error("codex-lb reported no quota limits (limits may be unset or hidden)");
+	return { windows, resets, plan: "codex-lb" };
+}
+
+export function codexLbUsageUrl(baseUrl: string): string {
+	const url = new URL(baseUrl);
+	if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+		throw new Error("codex-lb requires an HTTP(S) base URL without credentials, query, or fragment");
+	}
+	const base = url.pathname.replace(/\/+$/, "");
+	if (!base.endsWith("/v1")) throw new Error("codex-lb base URL must end in /v1");
+	url.pathname = `${base}/usage`;
+	return url.toString();
+}
+
+export function createCodexLbCfg(id: string): ProviderCfg {
+	return {
+		id,
+		// Provider IDs can point at different hosts/keys in different sessions.
+		// Keep proxy quotas session-local rather than sharing the ID-only disk cache.
+		sharedCache: false,
+		async fetchUsage(signal, ctx) {
+			const registry = ctx?.modelRegistry;
+			const model = ctx?.model?.provider === id ? ctx.model : registry?.getAll().find((m) => m.provider === id);
+			if (!registry || !model) throw new MissingCredentialError(`no configured model for ${id}`);
+			const auth = await registry.getApiKeyAndHeaders(model);
+			if (!auth.ok) throw new Error(`Unable to resolve credentials for ${id}; check provider configuration`);
+			const headers = new Headers({ Accept: "application/json" });
+			if (auth.apiKey) headers.set("Authorization", `Bearer ${auth.apiKey}`);
+			for (const [name, value] of Object.entries(auth.headers ?? {})) {
+				if (value === null) headers.delete(name);
+				else headers.set(name, value);
+			}
+			if (!headers.has("Authorization")) throw new MissingCredentialError(`no API key for ${id}`);
+			const res = await fetch(codexLbUsageUrl(auth.baseUrl ?? model.baseUrl), {
+				headers,
+				redirect: "error",
+				signal: anySignal(signal, AbortSignal.timeout(10_000)),
+			});
+			if (!res.ok) throw await usageHttpError(res, id, [
+				auth.apiKey ?? "", headers.get("Authorization")?.replace(/^Bearer\s+/i, "") ?? "", ...headers.values(),
+			]);
+			return parseCodexLbUsage(await res.json());
+		},
+		render: codexCfg.render,
+	};
+}
 
 const ANTIGRAVITY_CLIENT_ID = Buffer.from(
 	"MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlc" +
@@ -973,8 +1080,8 @@ async function refreshAntigravityToken(
 		signal: anySignal(signal, AbortSignal.timeout(10_000)),
 	});
 	if (!res.ok) {
-		await res.body?.cancel().catch(() => undefined);
-		throw new Error(`token refresh HTTP ${res.status}`);
+		const error = await usageHttpError(res, "antigravity", [refreshToken]);
+		throw new Error(`token refresh ${error.message}`);
 	}
 	const data = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
 	if (typeof data.access_token !== "string" || !data.access_token) {
@@ -1040,8 +1147,6 @@ export const antigravityCfg: ProviderCfg = {
 		async function queryQuota(
 			token: string,
 		): Promise<{ response: Response; endpoint: string }> {
-			let lastResponse: Response | undefined;
-			let lastEndpoint: string | undefined;
 			let lastError: unknown;
 			for (const endpoint of endpoints) {
 				try {
@@ -1054,18 +1159,13 @@ export const antigravityCfg: ProviderCfg = {
 							signal: anySignal(signal, AbortSignal.timeout(10_000)),
 						},
 					);
-					lastResponse = response;
-					lastEndpoint = endpoint;
 					if (response.ok || !RETRYABLE_ANTIGRAVITY_STATUSES.has(response.status)) {
 						return { response, endpoint };
 					}
-					await response.body?.cancel().catch(() => undefined);
+					lastError = await usageHttpError(response, "antigravity", [token, refreshToken ?? ""]);
 				} catch (error) {
 					lastError = error;
 				}
-			}
-			if (lastResponse && lastEndpoint) {
-				return { response: lastResponse, endpoint: lastEndpoint };
 			}
 			throw lastError instanceof Error
 				? lastError
@@ -1074,6 +1174,7 @@ export const antigravityCfg: ProviderCfg = {
 
 		let quotaResult = await queryQuota(access);
 		if (quotaResult.response.status === 401 && refreshToken) {
+			await quotaResult.response.body?.cancel().catch(() => undefined);
 			cachedAntigravityToken = undefined;
 			access = await refreshAntigravityToken(refreshToken, signal);
 			quotaResult = await queryQuota(access);
@@ -1082,8 +1183,7 @@ export const antigravityCfg: ProviderCfg = {
 		const baseUrl = quotaResult.endpoint;
 
 		if (!resQuota.ok) {
-			await resQuota.body?.cancel().catch(() => undefined);
-			throw new Error(`HTTP ${resQuota.status}`);
+			throw await usageHttpError(resQuota, "antigravity", [access, refreshToken ?? ""]);
 		}
 		const quotaJson = (await resQuota.json()) as {
 			groups?: Array<{
@@ -1229,8 +1329,8 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Resolve a `/usage refresh` target. Empty/`all` means every provider (the
- * default), `active` means the provider behind the current model, and anything
+ * Resolve a `/usage refresh` target. Empty/`active` means the current provider,
+ * `all` explicitly selects every configured usage provider, and anything
  * else must match a provider id or one of its aliases. Returns `undefined` for
  * an unknown target so the caller can warn without issuing a request.
  */
@@ -1240,8 +1340,8 @@ export function resolveRefreshTargets(
 	activeProviderId?: string,
 ): ProviderCfg[] | undefined {
 	const target = arg.trim().toLowerCase();
-	if (!target || target === "all") return [...cfgs];
-	if (target === "active") {
+	if (target === "all") return [...cfgs];
+	if (!target || target === "active") {
 		const active = activeProviderId
 			? cfgs.find((c) => c.id.toLowerCase() === activeProviderId.toLowerCase())
 			: undefined;
@@ -1259,7 +1359,7 @@ export function resolveRefreshTargets(
 export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 	if (results.length === 0) return "No usage providers to refresh";
 	if (results.length === 1) {
-		const { id, outcome } = results[0];
+		const { id, outcome, error } = results[0];
 		switch (outcome) {
 			case "fetched":
 				return `Usage refreshed for ${id}`;
@@ -1268,7 +1368,7 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 			case "skipped":
 				return `Usage refresh skipped for ${id} (no credentials)`;
 			default:
-				return `Usage refresh failed for ${id}`;
+				return `Usage refresh failed for ${id}${error ? `: ${error}` : ""}`;
 		}
 	}
 	const idsWith = (outcome: RefreshOutcome) =>
@@ -1276,7 +1376,8 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 	const fetched = idsWith("fetched");
 	const cached = idsWith("cached");
 	const skipped = idsWith("skipped");
-	const failed = idsWith("failed");
+	const failed = results.filter((r) => r.outcome === "failed")
+		.map((r) => `${r.id}${r.error ? ` (${r.error})` : ""}`);
 	const parts: string[] = [];
 	if (fetched.length === results.length) {
 		parts.push(`Usage refreshed for all ${results.length} providers (${fetched.join(", ")})`);
@@ -1294,8 +1395,11 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 export default function (pi: ExtensionAPI) {
 	const cache = new Map<string, ProviderState>();
 	let currentCtx: StatusCtx | undefined;
-	const cfgs = usageProviderCfgs;
-	let mode: UsageMode = loadPrefs().mode;
+	const prefs = loadPrefs();
+	const cfgs = [...usageProviderCfgs, ...(prefs.codexLbProviders ?? [])
+		.filter((id) => !usageProviderCfgs.some((cfg) => cfg.id === id))
+		.map(createCodexLbCfg)];
+	let mode: UsageMode = prefs.mode;
 
 	function renderUi(
 		ui: StatusCtx["ui"] | undefined,
@@ -1355,7 +1459,7 @@ export default function (pi: ExtensionAPI) {
 		const activeProvider = model?.provider;
 		if (!activeProvider) return;
 		const cfg = cfgs.find((c) => c.id === activeProvider);
-		if (!cfg) return;
+		if (!cfg || cfg.sharedCache === false) return;
 
 		const state = cache.get(cfg.id);
 		if (!state) return;
@@ -1511,7 +1615,7 @@ export default function (pi: ExtensionAPI) {
 			const model = safeModel(ctx);
 
 			// Sync with disk cache if another session fetched newer data.
-			const disk = (await diskCache.read())[cfg.id];
+			const disk = cfg.sharedCache === false ? undefined : (await diskCache.read())[cfg.id];
 			if (!isCurrentRequest()) return "cached";
 			if (!disk?.data || !Number.isFinite(disk.fetchedAt)) {
 				// No usable shared data; continue to the provider request.
@@ -1554,8 +1658,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			state.lastAttempt = now;
+			state.lastError = undefined;
 			try {
-				const data = normalizeUsageData(await cfg.fetchUsage(ac.signal));
+				const data = normalizeUsageData(await cfg.fetchUsage(ac.signal, ctx));
 				if (!data) throw new Error("provider returned no valid usage data");
 				const ui = safeUi(ctx);
 				if (!ui || !isCurrentRequest()) return "cached";
@@ -1564,7 +1669,7 @@ export default function (pi: ExtensionAPI) {
 				state.lastData = data;
 				state.lastText = renderText(cfg, data, ui, model?.id);
 				renderUi(ui, cfg.id, state.lastText);
-				await diskCache.write(cfg.id, data);
+				if (cfg.sharedCache !== false) await diskCache.write(cfg.id, data);
 				return "fetched";
 			} catch (err) {
 				const ui = safeUi(ctx);
@@ -1579,6 +1684,7 @@ export default function (pi: ExtensionAPI) {
 					return "skipped";
 				}
 				state.failStreak += 1;
+				state.lastError = err instanceof Error ? err.message : String(err);
 				console.error(
 					`[${cfg.id}-usage] fetch failed (${state.failStreak}×): ` +
 						(err instanceof Error ? err.message : String(err)),
@@ -1659,7 +1765,10 @@ export default function (pi: ExtensionAPI) {
 			if (c !== active) clear(ctx, c.id);
 		}
 		if (active) {
-			startDiskCacheWatcher();
+			if (active.sharedCache === false) {
+				stopDiskCacheWatcher();
+				if (force) clear(ctx, active.id);
+			} else startDiskCacheWatcher();
 			poke(active, ctx, force);
 		} else {
 			stopDiskCacheWatcher();
@@ -1695,7 +1804,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		mode = next;
-		await savePrefs({ mode });
+		await savePrefs({ ...prefs, mode });
 
 		if (next === "off") {
 			stopDiskCacheWatcher();
@@ -1724,8 +1833,8 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	/**
-	 * `/usage refresh [all|<provider>|active]` — force a live refetch for every
-	 * usage provider (the default), or just the named/active one, bypassing the
+	 * `/usage refresh [active|<provider>|all]` — force a live refetch for the
+	 * active provider by default, or the named/all providers, bypassing the
 	 * cooldown and burst guards. Useful when the source API lags (e.g.
 	 * Antigravity quota summary right after a reset) and you want to rule out
 	 * client-side staleness in one keystroke.
@@ -1740,6 +1849,10 @@ export default function (pi: ExtensionAPI) {
 		}
 		const targets = resolveRefreshTargets(args, cfgs, safeModel(ctx)?.provider);
 		if (!targets) {
+			if (!args.trim() || args.trim().toLowerCase() === "active") {
+				ctx.ui.notify(`Usage is not configured for active provider "${safeModel(ctx)?.provider ?? "none"}". For codex-lb, add its provider ID to codexLbProviders in subscription-usage-prefs.json and reload. Use /usage refresh all only to check other providers.`, "warning");
+				return;
+			}
 			ctx.ui.notify(
 				`Unknown usage provider "${args.trim()}". Known: ${cfgs.map((c) => c.id).join(", ")}` +
 				` (or "all"/"active")`,
@@ -1753,6 +1866,7 @@ export default function (pi: ExtensionAPI) {
 			targets.map(async (cfg): Promise<RefreshResult> => ({
 				id: cfg.id,
 				outcome: await refresh(cfg, ctx, true, true),
+				error: cache.get(cfg.id)?.lastError,
 			})),
 		);
 		const results: RefreshResult[] = settled.map((entry, index) =>
@@ -1767,14 +1881,14 @@ export default function (pi: ExtensionAPI) {
 		const state = activeCfg ? cache.get(activeCfg.id) : undefined;
 		if (activeCfg && state && safeUi(ctx))
 			arm(activeCfg, ctx, nextDelay(state, Date.now(), current?.id, activeCfg.id));
-		ctx.ui.notify(formatRefreshNotice(results), "info");
+		ctx.ui.notify(formatRefreshNotice(results), results.some((r) => r.outcome === "failed") ? "warning" : "info");
 	}
 
 	/**
 	 * Single `/usage` command: bare `/usage` shows the detailed readout;
 	 * `/usage toggle [bars|percent|off]` cycles the footer style;
-	 * `/usage refresh [all|<provider>|active]` force-refetches every usage
-	 * provider (default) or the named/active one.
+	 * `/usage refresh [active|<provider>|all]` force-refetches the active usage
+	 * provider by default, or the explicitly named/all providers.
 	 */
 	pi.registerCommand("usage", {
 		description: "Show subscription usage (/usage | toggle | refresh [all|<provider>|active])",
@@ -1784,7 +1898,7 @@ export default function (pi: ExtensionAPI) {
 			if (spaceIndex === -1) {
 				const subcommands = [
 					{ value: "toggle", label: "toggle", description: "Cycle footer style: bars → percent → off" },
-					{ value: "refresh", label: "refresh", description: "Force-refresh every provider now (optionally name one)" },
+					{ value: "refresh", label: "refresh", description: "Force-refresh the active provider (or name one/all)" },
 					{ value: "help", label: "help", description: "Show usage help" },
 				];
 				const filtered = subcommands.filter((sub) =>
@@ -1846,7 +1960,7 @@ export default function (pi: ExtensionAPI) {
 							"Subscription usage commands:",
 							"• /usage — detailed usage for all providers",
 							"• /usage toggle [bars|percent|off] — cycle or set footer style",
-							"• /usage refresh [all|<provider>|active] — force-refresh every provider (default: all)",
+							"• /usage refresh [active|<provider>|all] — force-refresh usage (default: active)",
 						].join("\n"),
 						"info",
 					);
@@ -1881,7 +1995,7 @@ export default function (pi: ExtensionAPI) {
 				const state = cache.get(cfg.id);
 				let data = state?.lastData;
 				let fetchedAt = state?.lastFetch;
-				if (!data) {
+				if (!data && cfg.sharedCache !== false) {
 					try {
 						const disk = (await diskCache.read())[cfg.id];
 						if (disk?.data) {
@@ -1896,7 +2010,7 @@ export default function (pi: ExtensionAPI) {
 				sections.push(
 					data
 						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now() })
-						: `${cfg.id}: no usage data yet`,
+						: `${cfg.id}: ${state?.lastError ?? "no usage data yet"}`,
 				);
 			}
 			const hiddenHint = mode === "off" ? "\n(Footer hidden — /usage toggle to restore it)" : "";
@@ -1904,7 +2018,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 	pi.on("session_start", async (_event, ctx) => {
-		startDiskCacheWatcher();
 		route(ctx, true);
 	});
 
