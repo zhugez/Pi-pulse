@@ -19,7 +19,7 @@ The collection currently includes two observability extensions, integrated model
 
 ### Code Mode (`code_exec`)
 
-A programmable execution tool for Pi inspired by Code Mode and Fabric. Instead of making multiple sequential tool calls that flood the conversation context with raw data dumps, `code_exec` runs an asynchronous JavaScript snippet in an isolated sandbox and returns only the final result and console output.
+A programmable execution tool for Pi. Instead of making multiple sequential tool calls that flood the conversation context with raw data dumps, `code_exec` runs an asynchronous JavaScript snippet in an isolated sandbox and returns only the final result and console output.
 
 - **Available globals**: `fs` (`readFile`, `writeFile`, `readdir`, `stat`, `exists`), `exec(cmd, args)`, `console.log(...)`, `cwd`, `path`, `Promise`, `JSON`.
 - **Slash command**: `/code-exec <code...>` for testing code snippets directly from the prompt editor.
