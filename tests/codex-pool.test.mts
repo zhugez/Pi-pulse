@@ -931,16 +931,25 @@ test("stream snapshots share completed blocks and isolate growing tool arguments
       const pool = createCodexPool(store);
       const text = "x".repeat(64_000);
       const events = await collectEvents(pool.provider[method](dummyModel, makeContext(), {
-        fetch: async () => sseResponse([
-          JSON.stringify({ type: "response.created", response: { id: "resp_snap" } }),
-          JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_snap" } }),
-          JSON.stringify({ type: "response.output_text.delta", output_index: 0, delta: text }),
-          JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_snap", content: [{ type: "output_text", text }] } }),
-          JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "fc_snap", call_id: "call_snap", name: "write", arguments: "" } }),
-          JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: '{"text":"' + text }),
-          JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: 'tail"}' }),
-          JSON.stringify({ type: "error", error: { code: "server_error", message: "secret-snapshot-error" } }),
-        ]),
+        fetch: async () => new Response(new ReadableStream({
+          async start(controller) {
+            const lines = [
+              JSON.stringify({ type: "response.created", response: { id: "resp_snap" } }),
+              JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_snap" } }),
+              JSON.stringify({ type: "response.output_text.delta", output_index: 0, delta: text }),
+              JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_snap", content: [{ type: "output_text", text }] } }),
+              JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "fc_snap", call_id: "call_snap", name: "write", arguments: "" } }),
+              JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: '{"text":"' + text }),
+              JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: 'tail"}' }),
+              JSON.stringify({ type: "error", error: { code: "server_error", message: "secret-snapshot-error" } }),
+            ];
+            for (const line of lines) {
+              controller.enqueue(new TextEncoder().encode(`data: ${line}\n\n`));
+              await sleep(5);
+            }
+            controller.close();
+          }
+        }), { headers: { "Content-Type": "text/event-stream" } }),
       }));
       const deltas = events.filter((event) => event.type === "toolcall_delta");
       assert.equal(deltas.length, 2);
