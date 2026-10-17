@@ -49,14 +49,14 @@ export default function codexPoolExtension(pi: ExtensionAPI): void {
   const pool = createCodexPool(store);
   pi.registerProvider(pool.provider);
   pi.registerCommand("codex-pool.accounts", {
-    description: "Codex pool: list | add (login) | switch <id> | remove <id>",
+    description: "Codex pool: list | add | switch <id> | remove <id>",
     handler: async (args, ctx) => {
       try {
         const [action = "list", id, ...extra] = args.trim().split(/\s+/).filter(Boolean);
-        if (extra.length || ((action === "list" || action === "add" || action === "login") && id)) {
-          throw new PoolError("Usage: /codex-pool.accounts list|add|login|switch <id>|remove <id>");
+        if (extra.length || ((action === "list" || action === "add") && id)) {
+          throw new PoolError("Usage: /codex-pool.accounts list|add|switch <id>|remove <id>");
         }
-        if (action === "add" || action === "login") {
+        if (action === "add") {
           if (!ctx.hasUI) throw new PoolError("Use /login codex-pool in an interactive Pi session to add accounts.");
           const added = await pool.add(interaction(ctx));
           emit(ctx, `Codex account linked: ${added.slice(0, 12)}. Select codex-pool in /model to use it.`);
@@ -74,7 +74,7 @@ export default function codexPoolExtension(pi: ExtensionAPI): void {
           });
           emit(ctx, lines.length ? `${lines.join("\n")}\n* preferred; session choice stays sticky until unavailable or switched.` :
             "No Codex accounts. Use /login codex-pool or /codex-pool.accounts add.");
-        } else throw new PoolError("Usage: /codex-pool.accounts list|add|login|switch <id>|remove <id>");
+        } else throw new PoolError("Usage: /codex-pool.accounts list|add|switch <id>|remove <id>");
       } catch (error) {
         emit(ctx, error instanceof PoolError ? error.message : "Codex account operation failed.", true);
       }

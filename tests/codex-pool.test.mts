@@ -565,6 +565,32 @@ test("8. Abort before selection, during refresh, response-body read, and streami
   }
 });
 
+test("account commands reject the login alias and retain add and native OAuth", async () => {
+  let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+  let provider: Provider | undefined;
+  codexPoolExtension({
+    registerProvider: (registered: Provider) => { provider = registered; },
+    registerCommand: (_name: string, command: { handler: typeof handler }) => { handler = command.handler; },
+  } as unknown as ExtensionAPI);
+  assert.ok(handler);
+  assert.equal(provider?.id, PROVIDER_ID);
+  assert.equal(typeof provider?.auth.oauth?.login, "function");
+  const messages: string[] = [];
+  const originalError = console.error;
+  console.error = (message: string) => { messages.push(message); };
+  try {
+    const ctx = { hasUI: false } as ExtensionCommandContext;
+    for (const args of ["login", "login extra", "add extra", "unknown"]) {
+      await handler(args, ctx);
+      assert.equal(messages.pop(), "Usage: /codex-pool.accounts list|add|switch <id>|remove <id>");
+    }
+    await handler("add", ctx);
+    assert.equal(messages.pop(), "Use /login codex-pool in an interactive Pi session to add accounts.");
+  } finally {
+    console.error = originalError;
+  }
+});
+
 test("9. Browser-success prompt cancellation versus genuine user cancellation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "codex-test-9-"));
   try {
