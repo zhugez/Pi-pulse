@@ -10,7 +10,7 @@ The collection currently includes two observability extensions, an integrated mo
 
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
-- **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation via [`pi-antigravity`](https://github.com/Rahularya01/pi-antigravity).
+- **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
@@ -75,7 +75,7 @@ Commands:
 
 ### Antigravity provider
 
-`pi-antigravity` is installed as a runtime dependency and loaded by the `pi-pulse` package manifest. After installing or updating `pi-pulse`, authenticate and select a model:
+The Antigravity provider is built directly into `pi-pulse`. After installing or updating `pi-pulse`, authenticate and select a model:
 
 ```text
 /login antigravity
@@ -93,7 +93,7 @@ Useful commands:
 /antigravity.image <prompt>
 ```
 
-Model availability depends on the signed-in Google account. `pi-antigravity` requires Pi/Pi AI 0.80.0 or later and Node.js 22.15.0 or later. It is an unofficial Google integration; review its requested OAuth permissions before approving access.
+Model availability depends on the signed-in Google account. It is an unofficial Google integration; review its requested OAuth permissions before approving access.
 
 ### Ponytail mode
 
@@ -154,10 +154,6 @@ Runtime state is stored under `~/.pi/agent/`:
 - `antigravity-accounts.json` (linked Antigravity accounts)
 
 The last two files contain sensitive access and refresh tokens. Never commit, share, or paste their contents into issues.
-
-## Attribution
-
-The observability extensions are derived from [Th1nhNg0/pi-extensions](https://github.com/Th1nhNg0/pi-extensions). The integrated provider is supplied by [Rahularya01/pi-antigravity](https://github.com/Rahularya01/pi-antigravity), and Ponytail mode by [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail). All are used under the MIT License. See [NOTICE](NOTICE).
 
 ## License
 

@@ -1045,7 +1045,7 @@ const RETRYABLE_ANTIGRAVITY_STATUSES = new Set([
 	504,
 ]);
 
-/** Match pi-antigravity's endpoint order so quota reads use the same pool. */
+/** Match Antigravity's endpoint order so quota reads use the same pool. */
 export function antigravityEndpointCandidates(
 	env: NodeJS.ProcessEnv = process.env,
 ): string[] {

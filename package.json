@@ -34,7 +34,9 @@
   "pi": {
     "extensions": [
       "./extensions/startup-entry.ts",
-      "./node_modules/pi-antigravity/src/index.ts",
+      "./extensions/antigravity/index.ts",
+      "./extensions/antigravity/features/google-search.ts",
+      "./extensions/antigravity/features/generate-image.ts",
       "./node_modules/@dietrichgebert/ponytail/pi-extension/index.js"
     ],
     "skills": [
@@ -43,20 +45,21 @@
   },
   "license": "MIT",
   "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.80.0",
     "@earendil-works/pi-coding-agent": ">=0.80.0",
     "@earendil-works/pi-tui": ">=0.80.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "^0.87.1",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@dietrichgebert/ponytail": "4.12.0",
-    "pi-antigravity": "0.8.0"
+    "undici": "^8.11.2"
   },
   "bundleDependencies": [
-    "pi-antigravity",
     "@dietrichgebert/ponytail"
   ]
 }
