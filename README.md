@@ -6,14 +6,39 @@
 
 An evolving workshop for building sharp, lightweight extensions for the [Pi Coding Agent](https://pi.dev). Each extension is designed to solve one workflow problem well while remaining easy to inspect, test, and install.
 
-The collection currently includes two observability extensions, an integrated model provider, and a coding-discipline mode:
+The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
+- **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
 - **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
+
+### Codex Pool
+
+Native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro subscription) directly integrated into Pi. No external proxy daemon, local proxy server, or `codex-lb` dependency needed.
+
+Features:
+- **Multiple accounts**: Link multiple ChatGPT Plus/Pro subscriptions using Pi's standard native OAuth flow.
+- **Automatic failover**: Bounded failover across available accounts when hitting quota limits (HTTP 429, `usage_limit_reached`, `rate_limit_exceeded`), respecting upstream `Retry-After` headers and `resets_at` timestamps.
+- **Replay suppression**: Replay is strictly suppressed once any meaningful stream output (text, thinking, or tool calls) has been emitted, preventing duplicate actions.
+- **Session stickiness**: Requests in a session stay pinned to the same account until it enters cooldown or requires login.
+- **Private atomic persistence**: Stored in `~/.pi/agent/codex-accounts.json` with owner-only `0600` permissions, atomic temporary-file replacement, and cross-process lock protection.
+- **Fail-closed token rotation**: Refresh-in-progress state is persisted before OAuth token exchange to ensure interrupted updates or crashes fail closed rather than reusing spent refresh tokens.
+
+Commands:
+
+```text
+/login codex-pool
+/codex-pool.accounts [list]
+/codex-pool.accounts add
+/codex-pool.accounts switch <id>
+/codex-pool.accounts remove <id>
+```
+
+After adding accounts, select any `codex-pool` model in `/model` (e.g., `codex-pool/gpt-5.3-codex`).
 
 ### Subscription usage
 
@@ -147,13 +172,14 @@ Pi extensions execute with the same operating-system permissions as Pi. The usag
 
 Runtime state is stored under `~/.pi/agent/`:
 
+- `codex-accounts.json` (pooled OpenAI Codex OAuth credentials, mode 0600)
 - `subscription-usage-cache.json`
 - `subscription-usage-prefs.json`
 - `live-throughput-prefs.json`
-- `auth.json` (Antigravity OAuth credentials managed by Pi)
+- `auth.json` (Antigravity and Codex Pool OAuth marker credentials managed by Pi)
 - `antigravity-accounts.json` (linked Antigravity accounts)
 
-The last two files contain sensitive access and refresh tokens. Never commit, share, or paste their contents into issues.
+The `codex-accounts.json`, `auth.json`, and `antigravity-accounts.json` files contain sensitive access and refresh tokens. Never commit, share, or paste their contents into issues.
 
 ## License
 
