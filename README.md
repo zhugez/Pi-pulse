@@ -22,11 +22,13 @@ Native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro subscription) di
 
 Features:
 - **Multiple accounts**: Link multiple ChatGPT Plus/Pro subscriptions using Pi's standard native OAuth flow.
-- **Automatic failover**: Bounded failover across available accounts when hitting quota limits (HTTP 429, `usage_limit_reached`, `rate_limit_exceeded`), respecting upstream `Retry-After` headers and `resets_at` timestamps.
+- **Automatic failover**: Bounded failover across available accounts when hitting quota limits (HTTP 429, `usage_limit_reached`, `rate_limit_exceeded`) or authentication failures (HTTP 401/403), respecting upstream `Retry-After` headers and `resets_at` timestamps.
 - **Replay suppression**: Replay is strictly suppressed once any meaningful stream output (text, thinking, or tool calls) has been emitted, preventing duplicate actions.
 - **Session stickiness**: Requests in a session stay pinned to the same account until it enters cooldown or requires login.
 - **Private atomic persistence**: Stored in `~/.pi/agent/codex-accounts.json` with owner-only `0600` permissions, atomic temporary-file replacement, and cross-process lock protection.
 - **Fail-closed token rotation**: Refresh-in-progress state is persisted before OAuth token exchange to ensure interrupted updates or crashes fail closed rather than reusing spent refresh tokens.
+
+See [Codex Pool reference](extensions/codex-pool/README.md) for crash recovery, locking, and cancellation semantics.
 
 Commands:
 

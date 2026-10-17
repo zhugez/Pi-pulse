@@ -47,7 +47,7 @@ function interaction(ctx: ExtensionCommandContext): ProviderAuthInteraction {
 export default function codexPoolExtension(pi: ExtensionAPI): void {
   const store = new AccountStore(join(getAgentDir(), "codex-accounts.json"));
   const pool = createCodexPool(store);
-  pi.registerProvider(pool.provider);
+  (pi.registerProvider as (provider: unknown) => void)(pool.provider);
   pi.registerCommand("codex-pool.accounts", {
     description: "Codex pool: list | add | switch <id> | remove <id>",
     handler: async (args, ctx) => {

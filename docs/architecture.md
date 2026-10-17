@@ -4,7 +4,7 @@
 
 `extensions/startup-entry.ts` registers the observability extensions through
 `extensions/deferred-extension.ts`. The package manifest separately loads the
-native Antigravity extension and Ponytail dependency. Keep these entry paths stable.
+native Antigravity and Codex Pool extensions and Ponytail dependency. Keep these entry paths stable.
 
 `extensions/subscription-usage.ts` owns provider requests, the responsive usage
 widget below the editor, commands, and session scheduling. The widget measures
