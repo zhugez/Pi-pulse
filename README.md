@@ -8,6 +8,7 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
+- **Code Mode (`code_exec`)** — programmatically orchestrate file reads, shell commands, and data processing in an async sandbox without context bloat.
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
@@ -15,6 +16,14 @@ The collection currently includes two observability extensions, integrated model
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
+
+### Code Mode (`code_exec`)
+
+A programmable execution tool for Pi inspired by Code Mode and Fabric. Instead of making multiple sequential tool calls that flood the conversation context with raw data dumps, `code_exec` runs an asynchronous JavaScript snippet in an isolated sandbox and returns only the final result and console output.
+
+- **Available globals**: `fs` (`readFile`, `writeFile`, `readdir`, `stat`, `exists`), `exec(cmd, args)`, `console.log(...)`, `cwd`, `path`, `Promise`, `JSON`.
+- **Slash command**: `/code-exec <code...>` for testing code snippets directly from the prompt editor.
+- **Safety**: Execution timeouts (`timeoutMs`), output truncation guard, and signal-aware cancellation.
 
 ### Codex Pool
 
