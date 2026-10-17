@@ -858,6 +858,87 @@ test("11. P1: Forwarded partial events are isolated snapshots; secrets do not es
   }
 });
 
+test("concurrent quota responses cannot shorten a credential cooldown", async () => {
+  const dir = await mkdtemp(join(process.cwd(), ".codex-cooldown-"));
+  try {
+    const store = new AccountStore(join(dir, "accounts.json"));
+    await store.add(makeCredential("concurrent", "cooldown"));
+    const pool = createCodexPool(store);
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const short = collectEvents(pool.provider.streamSimple(dummyModel, makeContext(), {
+      fetch: async () => {
+        entered();
+        await released;
+        return new Response("{}", { status: 429, headers: { "retry-after": "1" } });
+      },
+    }));
+    await started;
+    await collectEvents(pool.provider.streamSimple(dummyModel, makeContext(), {
+      fetch: async () => new Response("{}", { status: 429, headers: { "retry-after": "3600" } }),
+    }));
+    const deadline = (await store.read()).accounts[0].cooldownUntil!;
+    release();
+    const events = await short;
+    assert.equal((await store.read()).accounts[0].cooldownUntil, deadline);
+    const last = events.at(-1);
+    assert.ok(last?.type === "error");
+    assert.match(last.error.errorMessage!, /~60m/);
+    let calls = 0;
+    await collectEvents(pool.provider.streamSimple(dummyModel, makeContext(), {
+      fetch: async () => { calls++; return new Response("{}", { status: 500 }); },
+    }));
+    assert.equal(calls, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("stream snapshots share completed blocks and isolate growing tool arguments", async () => {
+  const dir = await mkdtemp(join(process.cwd(), ".codex-snapshots-"));
+  try {
+    const store = new AccountStore(join(dir, "accounts.json"));
+    await store.add(makeCredential("snapshots", "snapshots"));
+    for (const method of ["stream", "streamSimple"] as const) {
+      const pool = createCodexPool(store);
+      const text = "x".repeat(64_000);
+      const events = await collectEvents(pool.provider[method](dummyModel, makeContext(), {
+        fetch: async () => sseResponse([
+          JSON.stringify({ type: "response.created", response: { id: "resp_snap" } }),
+          JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_snap" } }),
+          JSON.stringify({ type: "response.output_text.delta", output_index: 0, delta: text }),
+          JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_snap", content: [{ type: "output_text", text }] } }),
+          JSON.stringify({ type: "response.output_item.added", output_index: 1, item: { type: "function_call", id: "fc_snap", call_id: "call_snap", name: "write", arguments: "" } }),
+          JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: '{"text":"' + text }),
+          JSON.stringify({ type: "response.function_call_arguments.delta", output_index: 1, delta: 'tail"}' }),
+          JSON.stringify({ type: "error", error: { code: "server_error", message: "secret-snapshot-error" } }),
+        ]),
+      }));
+      const deltas = events.filter((event) => event.type === "toolcall_delta");
+      assert.equal(deltas.length, 2);
+      assert.equal(deltas[0].partial.content[0], deltas[1].partial.content[0]);
+      const first = deltas[0].partial.content[1];
+      const second = deltas[1].partial.content[1];
+      assert.ok(first.type === "toolCall" && second.type === "toolCall");
+      assert.equal(first.arguments.text, text);
+      assert.equal(second.arguments.text, text + "tail");
+      assert.equal("partialJson" in first, false);
+      assert.equal("customInput" in first, false);
+      for (const event of events) {
+        if ("partial" in event) {
+          assert.equal(event.partial.errorMessage, undefined);
+          assert.equal(event.partial.diagnostics, undefined);
+        }
+      }
+      assert.equal(JSON.stringify(events).includes("secret-snapshot-error"), false);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("12. P2: Multiline SSE quota error triggers failover and cooldown on SDK 0.87.1 streamSimple", async () => {
   const dir = await mkdtemp(join(tmpdir(), "codex-test-12-"));
   try {

@@ -37,23 +37,35 @@ function meaningful(event: AssistantMessageEvent): boolean {
     (block.type === "text" ? block.text.length > 0 : block.type === "thinking" && block.thinking.length > 0));
 }
 
-function snapshotMessage(message: AssistantMessage): AssistantMessage {
-  const clone = structuredClone(message);
+function copyContent<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(copyContent) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copyContent(item)])) as T;
+  }
+  return value;
+}
+
+function snapshotMessage(message: AssistantMessage, previous?: AssistantMessage, changedIndex?: number): AssistantMessage {
+  const { content, ...metadata } = message;
+  const clone: AssistantMessage = {
+    ...structuredClone(metadata),
+    content: content.map((block, index) => {
+      if (changedIndex !== undefined && index !== changedIndex && previous?.content[index]) return previous.content[index];
+      const { partialJson: _partialJson, customInput: _customInput, ...clean } = block as typeof block & { partialJson?: unknown; customInput?: unknown };
+      return copyContent(clean);
+    }),
+  };
   clone.provider = PROVIDER_ID;
   delete clone.errorMessage;
   delete clone.diagnostics;
-  for (const block of clone.content) {
-    delete (block as { partialJson?: unknown }).partialJson;
-    delete (block as { customInput?: unknown }).customInput;
-  }
   return clone;
 }
 
-function snapshotEvent(event: AssistantMessageEvent): AssistantMessageEvent {
+function snapshotEvent(event: AssistantMessageEvent, previous?: AssistantMessage): AssistantMessageEvent {
   if ("partial" in event) {
-    const snap: AssistantMessageEvent = { ...event, partial: snapshotMessage(event.partial) };
+    const snap: AssistantMessageEvent = { ...event, partial: snapshotMessage(event.partial, previous, "contentIndex" in event ? event.contentIndex : undefined) };
     if (event.type === "toolcall_end") {
-      (snap as { toolCall: unknown }).toolCall = structuredClone(event.toolCall);
+      (snap as { toolCall: unknown }).toolCall = snap.partial.content[event.contentIndex];
     }
     return snap;
   }
@@ -325,11 +337,13 @@ export function createCodexPool(store: AccountStore, native: Provider = openaiCo
               ? { ...message, provider: "openai-codex" } : message) };
           const inner = simple ? native.streamSimple(nativeModel, nativeContext, innerOptions) : native.stream(nativeModel, nativeContext, innerOptions);
           let terminal: AssistantMessageEvent | undefined;
+          let previousSnapshot: AssistantMessage | undefined;
           try {
             for await (const event of inner) {
               if (event.type === "error" || event.type === "done") { terminal = event; break; }
               if ("partial" in event) output = event.partial;
-              const snap = snapshotEvent(event);
+              const snap = snapshotEvent(event, previousSnapshot);
+              if ("partial" in snap) previousSnapshot = snap.partial;
               if (!committed) {
                 buffered.push(snap);
                 if (meaningful(snap)) {
@@ -362,7 +376,7 @@ export function createCodexPool(store: AccountStore, native: Provider = openaiCo
               // A concurrent login/refresh must not be invalidated by an old response.
               if (!current || current.credential.refresh !== account.credential.refresh) return;
               if (auth) current.needsLogin = true;
-              else current.cooldownUntil = cooldownUntil(headers, resetAt);
+              else current.cooldownUntil = Math.max(current.cooldownUntil ?? 0, cooldownUntil(headers, resetAt));
             }, options?.signal);
           }
           if (committed) {
