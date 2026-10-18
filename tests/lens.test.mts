@@ -89,13 +89,23 @@ test("lens: checkFileDiagnostics passes valid JSON and JS", async () => {
   assert.equal(jsFindings.length, 0);
 });
 
-test("lens: checkFileDiagnostics catches JavaScript syntax errors", async () => {
+test("lens: checkFileDiagnostics catches JavaScript and TypeScript syntax errors", async () => {
   const badJs = `const x = ;`;
   const findings = await checkFileDiagnostics("broken.js", badJs);
 
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, "error");
   assert.match(findings[0].message, /syntax error/i);
+
+  const badTs = `interface Broken { id: string; const y: number = ; }`;
+  const tsFindings = await checkFileDiagnostics("broken.ts", badTs);
+  assert.equal(tsFindings.length, 1);
+  assert.equal(tsFindings[0].severity, "error");
+  assert.match(tsFindings[0].message, /syntax error/i);
+
+  // Verifies LRU cache hit
+  const cachedTsFindings = await checkFileDiagnostics("broken.ts", badTs);
+  assert.equal(cachedTsFindings, tsFindings);
 });
 
 test("lens: ReadGuardTracker warns on unread existing files and permits read files", async () => {

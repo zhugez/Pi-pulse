@@ -26,10 +26,17 @@
   "engines": {
     "node": ">=22.15.0"
   },
+  "packageManager": "pnpm@12.14.0",
+  "onlyBuiltDependencies": [
+    "@google/genai",
+    "esbuild",
+    "protobufjs",
+    "@dietrichgebert/ponytail"
+  ],
   "scripts": {
     "test": "bash scripts/test.sh",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test"
+    "check": "pnpm run typecheck && pnpm test"
   },
   "pi": {
     "extensions": [

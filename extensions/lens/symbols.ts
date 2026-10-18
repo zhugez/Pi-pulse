@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface CodeSymbol {
   name: string;
   kind: "function" | "class" | "interface" | "type" | "variable" | "method";
@@ -9,77 +11,89 @@ export interface CodeSymbol {
 const TS_JS_PATTERNS = [
   // export function / function
   {
-    regex: /^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*(\([^)]*\))/m,
+    regex: /^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*(\([^)]*\))/,
     kind: "function" as const,
   },
   // export class / class
   {
-    regex: /^(?:export\s+(?:default\s+)?)?class\s+([A-Za-z0-9_$]+)(?:\s+extends|\s+implements|\s*\{)/m,
+    regex: /^(?:export\s+(?:default\s+)?)?class\s+([A-Za-z0-9_$]+)(?:\s+extends|\s+implements|\s*\{)/,
     kind: "class" as const,
   },
   // export interface
   {
-    regex: /^(?:export\s+)?interface\s+([A-Za-z0-9_$]+)(?:<[^>]+>)?(?:\s+extends|\s*\{)/m,
+    regex: /^(?:export\s+)?interface\s+([A-Za-z0-9_$]+)(?:<[^>]+>)?(?:\s+extends|\s*\{)/,
     kind: "interface" as const,
   },
   // export type
   {
-    regex: /^(?:export\s+)?type\s+([A-Za-z0-9_$]+)(?:<[^>]+>)?\s*=/m,
+    regex: /^(?:export\s+)?type\s+([A-Za-z0-9_$]+)(?:<[^>]+>)?\s*=/,
     kind: "type" as const,
   },
   // export const/let arrow or declaration
   {
-    regex: /^(?:export\s+)(?:const|let|var)\s+([A-Za-z0-9_$]+)(?:\s*:\s*[^=]+)?\s*=/m,
+    regex: /^(?:export\s+)(?:const|let|var)\s+([A-Za-z0-9_$]+)(?:\s*:\s*[^=]+)?\s*=/,
     kind: "variable" as const,
   },
 ];
 
 const PYTHON_PATTERNS = [
   {
-    regex: /^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*(\([^)]*\))/m,
+    regex: /^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*(\([^)]*\))/,
     kind: "function" as const,
   },
   {
-    regex: /^class\s+([A-Za-z0-9_]+)(?:\([^)]*\))?:/m,
+    regex: /^class\s+([A-Za-z0-9_]+)(?:\([^)]*\))?:/,
     kind: "class" as const,
   },
 ];
 
 const GO_PATTERNS = [
   {
-    regex: /^func\s+(?:\([^)]+\)\s+)?([A-Za-z0-9_]+)\s*(\([^)]*\))/m,
+    regex: /^func\s+(?:\([^)]+\)\s+)?([A-Za-z0-9_]+)\s*(\([^)]*\))/,
     kind: "function" as const,
   },
   {
-    regex: /^type\s+([A-Za-z0-9_]+)\s+struct/m,
+    regex: /^type\s+([A-Za-z0-9_]+)\s+struct/,
     kind: "class" as const,
   },
   {
-    regex: /^type\s+([A-Za-z0-9_]+)\s+interface/m,
+    regex: /^type\s+([A-Za-z0-9_]+)\s+interface/,
     kind: "interface" as const,
   },
 ];
 
 const RUST_PATTERNS = [
   {
-    regex: /^(?:pub\s+(?:\([^)]+\)\s+)?)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*(\([^)]*\))/m,
+    regex: /^(?:pub\s+(?:\([^)]+\)\s+)?)?(?:async\s+)?fn\s+([A-Za-z0-9_]+)\s*(\([^)]*\))/,
     kind: "function" as const,
   },
   {
-    regex: /^(?:pub\s+)?struct\s+([A-Za-z0-9_]+)/m,
+    regex: /^(?:pub\s+)?struct\s+([A-Za-z0-9_]+)/,
     kind: "class" as const,
   },
   {
-    regex: /^(?:pub\s+)?trait\s+([A-Za-z0-9_]+)/m,
+    regex: /^(?:pub\s+)?trait\s+([A-Za-z0-9_]+)/,
     kind: "interface" as const,
   },
   {
-    regex: /^(?:pub\s+)?enum\s+([A-Za-z0-9_]+)/m,
+    regex: /^(?:pub\s+)?enum\s+([A-Za-z0-9_]+)/,
     kind: "type" as const,
   },
 ];
 
+// Bounded LRU cache for symbols (max 128 items)
+const SYMBOLS_CACHE_LIMIT = 128;
+const symbolsCache = new Map<string, CodeSymbol[]>();
+
+function contentHash(filePath: string, content: string): string {
+  return createHash("sha256").update(filePath).update("\0").update(content).digest("hex");
+}
+
 export function extractSymbols(sourceText: string, filePath: string): CodeSymbol[] {
+  const hash = contentHash(filePath, sourceText);
+  const cached = symbolsCache.get(hash);
+  if (cached) return cached;
+
   const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
   const lines = sourceText.split(/\r?\n/);
   const symbols: CodeSymbol[] = [];
@@ -113,6 +127,12 @@ export function extractSymbols(sourceText: string, filePath: string): CodeSymbol
       }
     }
   }
+
+  if (symbolsCache.size >= SYMBOLS_CACHE_LIMIT) {
+    const oldestKey = symbolsCache.keys().next().value;
+    if (oldestKey) symbolsCache.delete(oldestKey);
+  }
+  symbolsCache.set(hash, symbols);
 
   return symbols;
 }

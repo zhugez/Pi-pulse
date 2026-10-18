@@ -1,6 +1,8 @@
 import * as vm from "node:vm";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
+import { stripTypeScriptTypes } from "node:module";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,10 +14,22 @@ export interface DiagnosticFinding {
   message: string;
 }
 
+// Bounded LRU cache for deterministic diagnostic results
+const DIAGNOSTIC_CACHE_LIMIT = 128;
+const diagnosticCache = new Map<string, DiagnosticFinding[]>();
+
+function contentHash(filePath: string, content: string): string {
+  return createHash("sha256").update(filePath).update("\0").update(content).digest("hex");
+}
+
 export async function checkFileDiagnostics(
   filePath: string,
   content: string,
 ): Promise<DiagnosticFinding[]> {
+  const hash = contentHash(filePath, content);
+  const cached = diagnosticCache.get(hash);
+  if (cached) return cached;
+
   const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
   const findings: DiagnosticFinding[] = [];
 
@@ -34,10 +48,24 @@ export async function checkFileDiagnostics(
         message: `JSON syntax error: ${msg}`,
       });
     }
-    return findings;
-  }
-
-  if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
+  } else if (ext === ".ts" || ext === ".tsx" || ext === ".mts" || ext === ".cts") {
+    // Node 24 native TypeScript syntax validation
+    try {
+      const stripped = stripTypeScriptTypes(content, { mode: "strip" });
+      new vm.Script(stripped, { filename: filePath });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      let line = 1;
+      const lineMatch = /:(\d+)(?::(\d+))?/.exec((err instanceof Error ? err.stack : "") || "");
+      if (lineMatch) line = Number.parseInt(lineMatch[1], 10);
+      findings.push({
+        file: filePath,
+        line,
+        severity: "error",
+        message: `TypeScript syntax error: ${msg}`,
+      });
+    }
+  } else if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
     try {
       // Parse syntax without executing
       new vm.Script(content, { filename: filePath });
@@ -56,10 +84,7 @@ export async function checkFileDiagnostics(
         });
       }
     }
-    return findings;
-  }
-
-  if (ext === ".py") {
+  } else if (ext === ".py") {
     try {
       // Use python3 py_compile via stdin to check syntax
       await execFileAsync("python3", ["-c", `
@@ -91,8 +116,14 @@ finally:
         message: `Python syntax error: ${stderr.trim() || execError?.message || String(err)}`,
       });
     }
-    return findings;
   }
+
+  // Manage bounded cache
+  if (diagnosticCache.size >= DIAGNOSTIC_CACHE_LIMIT) {
+    const oldestKey = diagnosticCache.keys().next().value;
+    if (oldestKey) diagnosticCache.delete(oldestKey);
+  }
+  diagnosticCache.set(hash, findings);
 
   return findings;
 }
