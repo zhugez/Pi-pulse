@@ -27,3 +27,4 @@ ln -s "$PWD/node_modules" "$check_dir/node_modules"
   tests/*.mts
 
 node --test "$check_dir"/tests/*.mjs
+node --test tests/extension-load.test.mjs
