@@ -276,6 +276,26 @@ function utcStamp(ms: number): string {
 	}
 }
 
+/** `YYYY-MM-DD HH:MM GMT+7` in Vietnam timezone for an epoch timestamp. */
+function vnStamp(ms: number): string {
+	if (!Number.isFinite(ms)) return "unknown time";
+	try {
+		const d = new Date(ms);
+		const fmt = new Intl.DateTimeFormat("en-CA", {
+			timeZone: "Asia/Ho_Chi_Minh",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			hour12: false,
+		});
+		return `${fmt.format(d).replace(",", "")} GMT+7`;
+	} catch {
+		return utcStamp(ms);
+	}
+}
+
 /** Build a single bar segment: filled/empty cells + percent + reset countdown. */
 export function bar(
 	percent: number,
@@ -449,7 +469,7 @@ export function formatUsageDetails(
 				const reset = acc.resets?.[key];
 				if (typeof reset === "number" && Number.isFinite(reset)) {
 					const rel = resetLabel(reset, now);
-					const abs = utcStamp(reset);
+					const abs = vnStamp(reset);
 					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
 				} else {
 					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
@@ -478,7 +498,7 @@ export function formatUsageDetails(
 		const reset = normalized.resets?.[key];
 		if (typeof reset === "number" && Number.isFinite(reset)) {
 			const rel = resetLabel(reset, now);
-			const abs = utcStamp(reset);
+			const abs = providerId === "antigravity" ? vnStamp(reset) : utcStamp(reset);
 			lines.push(`\u2022 ${key}: ${safe}% ${cells} \u2014 resets ${rel} (${abs})`);
 		} else {
 			lines.push(`\u2022 ${key}: ${safe}% ${cells}`);
