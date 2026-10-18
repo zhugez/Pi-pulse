@@ -1,11 +1,18 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { fetch as oauthFetch } from "undici";
+import { Agent, fetch as oauthFetch } from "undici";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { defaultProjectId, loadCodeAssist } from "../client/client.js";
 import { escapeHtml, antigravityEnv } from "../utils/util.js";
 import { resolveCallbackHost, redactSecrets } from "../utils/security.js";
 import type { AntigravityOAuthCredentials, CallbackServer } from "../types/types.js";
+
+const oauthDispatcher = new Agent({
+  connect: {
+    autoSelectFamily: false,
+    family: 4,
+  },
+});
 
 export const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -77,6 +84,7 @@ async function getUserEmail(token: string): Promise<string | undefined> {
   try {
     const res = await oauthFetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
       headers: { Authorization: `Bearer ${token}` },
+      dispatcher: oauthDispatcher,
     });
     if (!res.ok) return undefined;
     const data = (await res.json()) as { email?: string };
@@ -360,6 +368,7 @@ export async function loginAntigravity(
         redirect_uri: REDIRECT_URI,
         code_verifier: verifier,
       }).toString(),
+      dispatcher: oauthDispatcher,
     });
     if (!tokenResponse.ok) {
       throw new Error(
@@ -407,6 +416,7 @@ export async function refreshAntigravityToken(
       refresh_token: credentials.refresh,
       grant_type: "refresh_token",
     }).toString(),
+    dispatcher: oauthDispatcher,
   });
   if (!response.ok) {
     throw new Error(
