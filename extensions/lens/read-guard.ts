@@ -19,16 +19,11 @@ export class ReadGuardTracker {
     return this.readFiles.has(norm);
   }
 
-  checkEdit(targetPath: string, cwd = process.cwd()): string | undefined {
+  checkPreModification(targetPath: string, cwd = process.cwd()): { wasExisting: boolean; shouldWarn: boolean } {
     const norm = this.normalize(targetPath, cwd);
-    // If file does not exist yet (creating new file with write tool), read-guard does not block
-    if (!existsSync(norm)) {
-      return undefined;
-    }
-    if (!this.readFiles.has(norm)) {
-      return `[read-guard] Note: '${path.relative(cwd, norm)}' was modified without prior read in this session. Verify lines to avoid accidental overwrite.`;
-    }
-    return undefined;
+    const wasExisting = existsSync(norm);
+    const shouldWarn = wasExisting && !this.readFiles.has(norm);
+    return { wasExisting, shouldWarn };
   }
 
   clear(): void {

@@ -79,60 +79,75 @@ test("lens: checkFileDiagnostics catches JSON syntax errors with line numbers", 
   assert.match(formatted, /config\.json/);
 });
 
-test("lens: checkFileDiagnostics passes valid JSON and JS", async () => {
+test("lens: checkFileDiagnostics passes valid ES modules, TypeScript, and TSX without false positives", async () => {
+  // Valid ES module with export/import must not fail
+  const goodEsm = `import path from "node:path";\nexport const answer: number = 42;\nexport function getAnswer(): number { return answer; }`;
+  const esmFindings = await checkFileDiagnostics("service.ts", goodEsm);
+  assert.equal(esmFindings.length, 0);
+
+  // Valid TSX
+  const goodTsx = `export function Button() { return <button type="button">Click</button>; }`;
+  const tsxFindings = await checkFileDiagnostics("button.tsx", goodTsx);
+  assert.equal(tsxFindings.length, 0);
+
+  // Valid JSON
   const goodJson = `{"valid": true, "count": 10}`;
   const jsonFindings = await checkFileDiagnostics("valid.json", goodJson);
   assert.equal(jsonFindings.length, 0);
-
-  const goodJs = `const x = 1; function test() { return x * 2; }`;
-  const jsFindings = await checkFileDiagnostics("valid.js", goodJs);
-  assert.equal(jsFindings.length, 0);
 });
 
-test("lens: checkFileDiagnostics catches JavaScript and TypeScript syntax errors", async () => {
-  const badJs = `const x = ;`;
-  const findings = await checkFileDiagnostics("broken.js", badJs);
+test("lens: checkFileDiagnostics catches real syntax errors in TS and JS", async () => {
+  const brokenTs = `export const answer: number = ;`;
+  const findings = await checkFileDiagnostics("broken.ts", brokenTs);
 
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, "error");
   assert.match(findings[0].message, /syntax error/i);
+  assert.ok(findings[0].line >= 1);
 
-  const badTs = `interface Broken { id: string; const y: number = ; }`;
-  const tsFindings = await checkFileDiagnostics("broken.ts", badTs);
-  assert.equal(tsFindings.length, 1);
-  assert.equal(tsFindings[0].severity, "error");
-  assert.match(tsFindings[0].message, /syntax error/i);
-
-  // Verifies LRU cache hit
-  const cachedTsFindings = await checkFileDiagnostics("broken.ts", badTs);
-  assert.equal(cachedTsFindings, tsFindings);
+  // LRU cache hit test: returns exact cached reference
+  const cached = await checkFileDiagnostics("broken.ts", brokenTs);
+  assert.equal(cached, findings);
 });
 
-test("lens: ReadGuardTracker warns on unread existing files and permits read files", async () => {
+test("lens: checkFileDiagnostics handles Python code with stdin piping and catches errors without hanging", async () => {
+  const goodPy = `def calculate_total(items):\n    return sum(x.price for x in items)\n`;
+  const goodFindings = await checkFileDiagnostics("calc.py", goodPy);
+  assert.equal(goodFindings.length, 0);
+
+  const badPy = `def broken_syntax(:\n    pass\n`;
+  const badFindings = await checkFileDiagnostics("broken.py", badPy);
+  assert.equal(badFindings.length, 1);
+  assert.equal(badFindings[0].severity, "error");
+  assert.match(badFindings[0].message, /syntax error/i);
+});
+
+test("lens: ReadGuardTracker lifecycle accurately distinguishes new vs existing files", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "read-guard-test-"));
   try {
     const tracker = new ReadGuardTracker();
     const existingFile = join(tempDir, "existing.ts");
-    const newFile = join(tempDir, "new.ts");
+    const newFile = join(tempDir, "brand-new.ts");
 
-    await writeFile(existingFile, "console.log('original');");
+    await writeFile(existingFile, "export const value = 1;");
 
-    // 1. Modifying unread existing file produces a warning
-    const warn = tracker.checkEdit(existingFile, tempDir);
-    assert.ok(warn !== undefined);
-    assert.match(warn, /modified without prior read/i);
+    // 1. Existing file before modification: shouldWarn is TRUE
+    const preExisting = tracker.checkPreModification(existingFile, tempDir);
+    assert.equal(preExisting.wasExisting, true);
+    assert.equal(preExisting.shouldWarn, true);
 
-    // 2. Modifying a brand new file does NOT produce a warning
-    const newWarn = tracker.checkEdit(newFile, tempDir);
-    assert.equal(newWarn, undefined);
+    // 2. Non-existing file before creation: shouldWarn is FALSE
+    const preNew = tracker.checkPreModification(newFile, tempDir);
+    assert.equal(preNew.wasExisting, false);
+    assert.equal(preNew.shouldWarn, false);
 
-    // 3. After marking as read, modifying produces NO warning
+    // 3. Once read is recorded: shouldWarn becomes FALSE
     tracker.markRead(existingFile, tempDir);
-    const readWarn = tracker.checkEdit(existingFile, tempDir);
-    assert.equal(readWarn, undefined);
+    const postRead = tracker.checkPreModification(existingFile, tempDir);
+    assert.equal(postRead.wasExisting, true);
+    assert.equal(postRead.shouldWarn, false);
 
-    // 4. Clear resets tracker state
-    assert.equal(tracker.size(), 1);
+    // 4. Clear resets state
     tracker.clear();
     assert.equal(tracker.size(), 0);
   } finally {

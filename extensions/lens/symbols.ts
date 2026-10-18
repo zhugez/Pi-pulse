@@ -92,7 +92,12 @@ function contentHash(filePath: string, content: string): string {
 export function extractSymbols(sourceText: string, filePath: string): CodeSymbol[] {
   const hash = contentHash(filePath, sourceText);
   const cached = symbolsCache.get(hash);
-  if (cached) return cached;
+  if (cached !== undefined) {
+    // True LRU promotion: refresh position on hit
+    symbolsCache.delete(hash);
+    symbolsCache.set(hash, cached);
+    return cached;
+  }
 
   const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
   const lines = sourceText.split(/\r?\n/);

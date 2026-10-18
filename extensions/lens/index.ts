@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
@@ -12,38 +12,54 @@ export { ReadGuardTracker } from "./read-guard.ts";
 
 export default function registerLens(pi: ExtensionAPI): void {
   const readGuard = new ReadGuardTracker();
+  const pendingModifications = new Map<string, { targetPath: string; wasExisting: boolean; shouldWarn: boolean }>();
 
-  // Reset or clear read guard on session changes
+  // Reset tracker on session changes
   pi.on("session_start", () => {
     readGuard.clear();
+    pendingModifications.clear();
   });
 
-  // Track reads and warn on unread edits
+  // Track pre-modification existence BEFORE tool modifies disk
   pi.on("tool_call", (event) => {
-    if (event.toolName === "read") {
+    if (event.toolName === "edit" || event.toolName === "write") {
       const targetPath = (event.input as { path?: string })?.path;
       if (typeof targetPath === "string") {
-        readGuard.markRead(targetPath);
+        const check = readGuard.checkPreModification(targetPath);
+        pendingModifications.set(event.toolCallId, { targetPath, ...check });
       }
     }
   });
 
-  // Post-edit real-time diagnostics feedback
+  // Post-execution handler: only mark read on success, warn based on pre-modification state
   pi.on("tool_result", async (event) => {
+    // 1. Mark read ONLY when read tool succeeds
+    if (event.toolName === "read" && !event.isError) {
+      const targetPath = (event.input as { path?: string })?.path;
+      if (typeof targetPath === "string") {
+        readGuard.markRead(targetPath);
+      }
+      return;
+    }
+
+    // 2. Post-edit diagnostics and read-guard notification
     if (event.toolName === "edit" || event.toolName === "write") {
       const targetPath = (event.input as { path?: string })?.path;
       if (typeof targetPath === "string" && !event.isError) {
         const notices: string[] = [];
 
-        // 1. Read-guard check
-        const guardNotice = readGuard.checkEdit(targetPath);
-        if (guardNotice) {
-          notices.push(guardNotice);
+        // Read-guard check based on pre-execution state
+        const pending = pendingModifications.get(event.toolCallId);
+        if (pending?.shouldWarn) {
+          const relPath = path.relative(process.cwd(), readGuard.normalize(targetPath));
+          notices.push(`[read-guard] Note: '${relPath}' was modified without prior read in this session. Verify lines to avoid accidental overwrite.`);
         }
-        // Mark as read now since it was just edited
+        pendingModifications.delete(event.toolCallId);
+
+        // Mark as read now since it was successfully written
         readGuard.markRead(targetPath);
 
-        // 2. Syntax & language diagnostics check
+        // Diagnostics check
         try {
           const resolvedPath = path.isAbsolute(targetPath) ? targetPath : path.resolve(process.cwd(), targetPath);
           const content = await fsPromises.readFile(resolvedPath, "utf8");
@@ -52,7 +68,7 @@ export default function registerLens(pi: ExtensionAPI): void {
             notices.push(formatDiagnostics(findings));
           }
         } catch {
-          // Ignore read errors for diagnostics
+          // Ignore read errors
         }
 
         if (notices.length > 0) {
@@ -61,6 +77,8 @@ export default function registerLens(pi: ExtensionAPI): void {
             text: "\n\n" + notices.join("\n\n"),
           });
         }
+      } else {
+        pendingModifications.delete(event.toolCallId);
       }
     }
   });
