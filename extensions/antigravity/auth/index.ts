@@ -14,10 +14,14 @@ export {
 export type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth.js";
 export {
   activateAccount,
+  acquireNextAccount,
   failoverToNextAccount,
+  isAccountRotationEnabled,
   listAccounts,
+  markAccountCooldown,
   rememberAccount,
   removeAccount,
+  setAccountRotation,
   updateRememberedAccount,
 } from "./accounts.js";
 export type { AccountSummary, StoredAccount } from "./accounts.js";

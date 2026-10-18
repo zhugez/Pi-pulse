@@ -15,11 +15,13 @@ export type StoredAccount = AntigravityOAuthCredentials & {
   accountId: string;
   addedAt: number;
   lastUsedAt: number;
+  cooldownUntil?: number;
 };
 
 type AccountsFile = {
   version: 1;
   activeAccountId?: string;
+  rotate?: boolean;
   accounts: Record<string, StoredAccount>;
 };
 
@@ -28,6 +30,7 @@ export type AccountSummary = {
   email?: string;
   active: boolean;
   lastUsedAt: number;
+  cooldown?: boolean;
 };
 
 function agentDir(): string {
@@ -88,9 +91,11 @@ function normalizeStore(value: Record<string, unknown> | undefined): AccountsFil
       : typeof value.activeEmail === "string"
         ? value.activeEmail
         : undefined;
+  const rotate = typeof value.rotate === "boolean" ? value.rotate : true;
   return {
     version: 1,
     activeAccountId: activeAccountId && accounts[activeAccountId] ? activeAccountId : undefined,
+    rotate,
     accounts,
   };
 }
@@ -119,6 +124,7 @@ function accountFromCredentials(
     accountId: existing?.accountId || accountIdFor(credentials),
     addedAt: existing?.addedAt || now,
     lastUsedAt: now,
+    cooldownUntil: existing?.cooldownUntil,
   };
 }
 
@@ -239,11 +245,13 @@ export function updateRememberedAccount(
 export function listAccounts(): AccountSummary[] {
   syncCurrentAuth();
   const store = loadAccountStore();
+  const now = Date.now();
   return sortedAccounts(store).map((account) => ({
     accountId: account.accountId,
     email: account.email,
     active: account.accountId === store.activeAccountId,
     lastUsedAt: account.lastUsedAt,
+    cooldown: Boolean(account.cooldownUntil && account.cooldownUntil > now),
   }));
 }
 
@@ -297,6 +305,87 @@ export async function removeAccount(selector: string): Promise<StoredAccount | u
   return next;
 }
 
+export function markAccountCooldown(tokenOrAccountId: string, durationMs = 60_000): void {
+  const store = loadAccountStore();
+  const account = Object.values(store.accounts).find(
+    (acc) =>
+      acc.access === tokenOrAccountId ||
+      acc.accountId === tokenOrAccountId ||
+      acc.email === tokenOrAccountId,
+  );
+  if (!account) return;
+  account.cooldownUntil = Date.now() + Math.max(durationMs, 5_000);
+  store.accounts[account.accountId] = account;
+  saveAccountStore(store);
+}
+
+export function setAccountRotation(enabled: boolean): boolean {
+  const store = loadAccountStore();
+  store.rotate = enabled;
+  saveAccountStore(store);
+  return enabled;
+}
+
+export function isAccountRotationEnabled(): boolean {
+  const store = loadAccountStore();
+  return store.rotate !== false;
+}
+
+/**
+ * Proactively selects the next account to use before sending a request.
+ * Rotates through available accounts using least-recently-used selection
+ * while skipping accounts that are currently on cooldown.
+ */
+export async function acquireNextAccount(): Promise<AntigravityApiKey | undefined> {
+  syncCurrentAuth();
+  const store = loadAccountStore();
+  const accounts = Object.values(store.accounts);
+  if (accounts.length === 0) return undefined;
+
+  // If rotation is explicitly disabled, stick to the active account
+  if (store.rotate === false) {
+    const active =
+      (store.activeAccountId && store.accounts[store.activeAccountId]) || accounts[0];
+    if (!active) return undefined;
+    try {
+      const fresh = await ensureFresh(active);
+      fresh.lastUsedAt = Date.now();
+      store.accounts[fresh.accountId] = fresh;
+      store.activeAccountId = fresh.accountId;
+      saveAccountStore(store);
+      writeActiveCredential(fresh);
+      return apiKeyFor(fresh);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const now = Date.now();
+  // Prioritize non-cooldown accounts, then least-recently-used
+  const candidates = [...accounts].sort((a, b) => {
+    const aCool = (a.cooldownUntil ?? 0) > now;
+    const bCool = (b.cooldownUntil ?? 0) > now;
+    if (aCool !== bCool) return aCool ? 1 : -1;
+    return (a.lastUsedAt || 0) - (b.lastUsedAt || 0);
+  });
+
+  for (const candidate of candidates) {
+    try {
+      const fresh = await ensureFresh(candidate);
+      if (!fresh.access) continue;
+      fresh.lastUsedAt = Date.now();
+      store.accounts[fresh.accountId] = fresh;
+      store.activeAccountId = fresh.accountId;
+      saveAccountStore(store);
+      writeActiveCredential(fresh);
+      return apiKeyFor(fresh);
+    } catch {
+      // Skip account if token refresh fails
+    }
+  }
+  return undefined;
+}
+
 /**
  * Switch to the next stored account that has not already been tried in this request.
  * Used when Antigravity returns a hard quota wall (HTTP 429).
@@ -306,9 +395,17 @@ export async function failoverToNextAccount(
 ): Promise<AntigravityApiKey | undefined> {
   syncCurrentAuth();
   const store = loadAccountStore();
-  const candidates = sortedAccounts(store).filter(
-    (account) => !triedAccessTokens.has(account.access),
-  );
+  const now = Date.now();
+  // Candidates not already tried in this request, prioritizing non-cooldown accounts, then least-recently-used
+  const candidates = Object.values(store.accounts)
+    .filter((account) => !triedAccessTokens.has(account.access))
+    .sort((a, b) => {
+      const aCool = (a.cooldownUntil ?? 0) > now;
+      const bCool = (b.cooldownUntil ?? 0) > now;
+      if (aCool !== bCool) return aCool ? 1 : -1;
+      return (a.lastUsedAt || 0) - (b.lastUsedAt || 0);
+    });
+
   for (const candidate of candidates) {
     try {
       const account = await ensureFresh(candidate);

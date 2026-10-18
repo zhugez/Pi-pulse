@@ -12,7 +12,11 @@ import {
 } from "@earendil-works/pi-ai";
 // Namespace import: transcript helpers exist on pi-ai >= 0.86; resolved at runtime.
 import * as piAi from "@earendil-works/pi-ai";
-import { failoverToNextAccount } from "../auth/accounts.js";
+import {
+  acquireNextAccount,
+  failoverToNextAccount,
+  markAccountCooldown,
+} from "../auth/accounts.js";
 import {
   antigravityHeaders,
   endpointCandidates,
@@ -1466,6 +1470,22 @@ export async function streamResponse(
   return hasContent;
 }
 
+function parseResetSeconds(text: string): number {
+  const m = text.match(/Resets? in ([^.\n]+)/i);
+  if (!m?.[1]) return 60;
+  const raw = m[1].trim();
+  let totalSeconds = 0;
+  const hours = raw.match(/(\d+)\s*h/i);
+  const minutes = raw.match(/(\d+)\s*m/i);
+  const seconds = raw.match(/(\d+)\s*s/i);
+  if (hours) totalSeconds += parseInt(hours[1], 10) * 3600;
+  if (minutes) totalSeconds += parseInt(minutes[1], 10) * 60;
+  if (seconds) totalSeconds += parseInt(seconds[1], 10);
+  if (totalSeconds > 0) return totalSeconds;
+  const num = parseInt(raw, 10);
+  return Number.isFinite(num) && num > 0 ? num : 60;
+}
+
 export function streamAntigravity(
   model: Model<Api>,
   context: Context,
@@ -1479,6 +1499,12 @@ export function streamAntigravity(
     const output = createOutput(model);
     try {
       let creds = parseApiKey(opts.apiKey);
+      try {
+        const rotated = await acquireNextAccount();
+        if (rotated) creds = rotated;
+      } catch {
+        // Fall back to caller's provided apiKey on error
+      }
       const triedAccessTokens = new Set<string>([creds.token]);
       const primaryEndpoint = endpointCandidates()[0];
       if (primaryEndpoint) prewarmConnection(primaryEndpoint);
@@ -1615,7 +1641,13 @@ export function streamAntigravity(
             }
           }
           const friendly = friendlyAntigravityError(response?.status, lastText);
-          if (response?.status === 429 && /Quota reached\./i.test(friendly)) {
+          const isQuota =
+            response?.status === 429 ||
+            (response?.status === 403 &&
+              /quota|exhausted|rate.?limit|limit reached/i.test(lastText));
+          if (isQuota) {
+            const waitSeconds = parseResetSeconds(lastText);
+            markAccountCooldown(creds.token, waitSeconds * 1000);
             const next = await failoverToNextAccount(triedAccessTokens);
             if (next) {
               triedAccessTokens.add(next.token);
@@ -1649,8 +1681,33 @@ export function streamAntigravity(
         };
         output.stopReason = "stop";
 
-        received = await streamResponse(response, stream, output, model);
-        if (received) break;
+        try {
+          received = await streamResponse(response, stream, output, model);
+          if (received) break;
+        } catch (streamErr) {
+          const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
+          const isStreamQuota = /429|quota|exhausted|rate.?limit|limit reached/i.test(errText);
+          if (isStreamQuota && output.content.length === 0) {
+            const waitSeconds = parseResetSeconds(errText);
+            markAccountCooldown(creds.token, waitSeconds * 1000);
+            const next = await failoverToNextAccount(triedAccessTokens);
+            if (next) {
+              triedAccessTokens.add(next.token);
+              creds = next;
+              requestHeaders = antigravityHeaders(creds.token);
+              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+              projectId = resolveProjectId({
+                token: creds.token,
+                warmedProject: switchedProject,
+                credentialProjectId: creds.projectId,
+              });
+              setLastProjectId(projectId);
+              emptyAttempt = -1;
+              continue;
+            }
+          }
+          throw streamErr;
+        }
       }
 
       if (!received) throw new Error("Antigravity API returned an empty response");

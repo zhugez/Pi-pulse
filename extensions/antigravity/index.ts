@@ -11,11 +11,13 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import {
   activateAccount,
   getApiKey,
+  isAccountRotationEnabled,
   listAccounts,
   loginAntigravity,
   rememberAccount,
   refreshAntigravityToken,
   removeAccount,
+  setAccountRotation,
   updateRememberedAccount,
 } from "./auth/index.js";
 import { DEFAULT_ENDPOINT } from "./client/index.js";
@@ -207,6 +209,17 @@ export default function (pi: ExtensionAPI): void {
           emitCommandOutput(ctx, `Antigravity account removed.${next}`);
           return;
         }
+        if (command.startsWith("rotate")) {
+          const sub = command.slice("rotate".length).trim().toLowerCase();
+          const current = isAccountRotationEnabled();
+          const next = sub === "on" ? true : sub === "off" ? false : !current;
+          setAccountRotation(next);
+          emitCommandOutput(
+            ctx,
+            `Antigravity account rotation: ${next ? "enabled (least-recently-used)" : "disabled (single active account)"}`,
+          );
+          return;
+        }
         const accounts = listAccounts();
         if (accounts.length === 0) {
           emitCommandOutput(
@@ -216,13 +229,14 @@ export default function (pi: ExtensionAPI): void {
           );
           return;
         }
+        const rotating = isAccountRotationEnabled();
         const lines = accounts.map(
           (account, index) =>
-            `${account.active ? "* " : "  "}${index + 1}. ${account.email || account.accountId}`,
+            `${account.active ? "* " : "  "}${index + 1}. ${account.email || account.accountId}${account.cooldown ? " (on cooldown)" : ""}`,
         );
         emitCommandOutput(
           ctx,
-          `${lines.join("\n")}\nUse /antigravity.accounts switch <index|email> or /antigravity.accounts remove <index|email>.`,
+          `${lines.join("\n")}\n\nRotation: ${rotating ? "enabled (auto round-robin across requests)" : "disabled (using active account)"}\nCommands:\n  /antigravity.accounts switch <index|email>\n  /antigravity.accounts rotate [on|off]\n  /antigravity.accounts remove <index|email>`,
         );
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
