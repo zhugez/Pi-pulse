@@ -10,7 +10,7 @@ import {
   type StreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { AccountStore, accountIdentity, PoolError, type Account } from "./store.ts";
 
 export const PROVIDER_ID = "codex-pool";
@@ -125,7 +125,7 @@ async function readErrorBody(response: Response, signal?: AbortSignal): Promise<
 
 // native is injectable only at the SDK boundary: tests exercise registration,
 // Models auth resolution and the real Codex HTTP/SSE adapter without credentials.
-export function createCodexPool(store: AccountStore, native: Provider = openaiCodexProvider()) {
+export function createCodexPool(store: AccountStore, native: Provider = builtinProviders().find((provider) => provider.id === "openai-codex")!) {
   const oauth = native.auth.oauth;
   if (!oauth) throw new PoolError("This Pi SDK has no native Codex OAuth support.");
   const sticky = new Map<string, string>();
