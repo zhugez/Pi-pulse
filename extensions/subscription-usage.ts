@@ -431,9 +431,10 @@ export function formatUsageDetails(
 		const lines: string[] = [`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`];
 		for (const acc of normalized.accounts) {
 			lines.push("");
-			const badge = acc.active ? " (active)" : acc.cooldown ? " (cooldown)" : "";
-			const planLabel = acc.plan ? ` \u2022 ${acc.plan}` : "";
-			lines.push(`[${acc.id}]${badge}${planLabel}`);
+			const icon = acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB";
+			const status = acc.active ? "active" : acc.cooldown ? "cooldown" : "standby";
+			const planText = acc.plan ? ` \u2022 ${acc.plan}` : "";
+			lines.push(`${icon} ${acc.id} [${status}${planText}]`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
@@ -443,13 +444,15 @@ export function formatUsageDetails(
 				if (typeof percent !== "number") continue;
 				const safe = normalizePercent(percent) ?? 0;
 				const cells = detailBar(safe);
+				const paddedKey = key.padEnd(9);
+				const paddedPct = `${safe}%`.padStart(4);
 				const reset = acc.resets?.[key];
 				if (typeof reset === "number" && Number.isFinite(reset)) {
 					const rel = resetLabel(reset, now);
 					const abs = utcStamp(reset);
-					lines.push(`\u2022 ${key}: ${safe}% ${cells} \u2014 resets ${rel} (${abs})`);
+					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
 				} else {
-					lines.push(`\u2022 ${key}: ${safe}% ${cells}`);
+					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
 				}
 			}
 		}

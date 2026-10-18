@@ -416,10 +416,10 @@ test("formatUsageDetails renders multi-account pooled breakdown", () => {
 		{ modelId: "gemini-3.8-flash", fetchedAt: now - 60_000, now },
 	);
 	assert.match(text, /Subscription usage — antigravity \(2 accounts pooled\) • gemini-3\.8-flash/);
-	assert.match(text, /\[tester@gmail\.com\] \(active\) • Pro/);
-	assert.match(text, /• 3p-5h: 0% ░░░░░░/);
-	assert.match(text, /\[other@gmail\.com\] \(cooldown\) • Pro/);
-	assert.match(text, /• 3p-5h: 100% ██████/);
+	assert.match(text, /● tester@gmail\.com \[active • Pro\]/);
+	assert.match(text, /• 3p-5h\s+0% ░░░░░░/);
+	assert.match(text, /⏳ other@gmail\.com \[cooldown • Pro\]/);
+	assert.match(text, /• 3p-5h\s+100% ██████/);
 	assert.match(text, /Updated 1m ago/);
 });
 
