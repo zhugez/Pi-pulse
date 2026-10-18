@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  createAssistantMessageEventStream,
   defaultProviderAuthContext,
   isRetryableAssistantError,
   normalizeContext,
@@ -17,6 +18,7 @@ import {
   type Provider,
   type ProviderAuthInteraction,
   type SimpleStreamOptions,
+  type ToolCall,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
@@ -969,6 +971,85 @@ test("stream snapshots share completed blocks and isolate growing tool arguments
       }
       assert.equal(JSON.stringify(events).includes("secret-snapshot-error"), false);
     }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("stream snapshots isolate nested JSON args from native stream mutation", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "codex-test-nested-"));
+  try {
+    const store = new AccountStore(join(dir, "accounts.json"));
+    await store.add(makeCredential("nested", "nested"));
+
+    const liveArguments = { nested: { query: "initial", tags: ["a"] } };
+    const toolBlock: ToolCall = {
+      type: "toolCall",
+      id: "call_nested",
+      name: "search",
+      arguments: liveArguments,
+    };
+    const liveMessage: AssistantMessage = {
+      role: "assistant",
+      provider: "openai-codex",
+      api: "openai-codex",
+      model: dummyModel.id,
+      timestamp: Date.now(),
+      content: [toolBlock],
+      stopReason: "pending",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+
+    const mockNative: Provider = {
+      ...openaiCodexProvider(),
+      streamSimple: (_model, _context, _opts) => {
+        const stream = createAssistantMessageEventStream();
+        void (async () => {
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "",
+            partial: liveMessage,
+          });
+          // Yield execution so the consumer processes the delta event snapshot
+          await sleep(5);
+          // Mutate nested JSON arguments on native stream object after emission
+          liveArguments.nested.query = "mutated";
+          liveArguments.nested.tags.push("b");
+          stream.push({
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: toolBlock,
+            partial: liveMessage,
+          });
+          await sleep(5);
+          stream.push({
+            type: "done",
+            reason: "stop",
+            message: { ...liveMessage, stopReason: "stop" },
+          });
+        })();
+        return stream;
+      },
+    };
+
+    const pool = createCodexPool(store, mockNative);
+    const events = await collectEvents(pool.provider.streamSimple(dummyModel, makeContext()));
+    const deltaEvent = events.find((e) => e.type === "toolcall_delta");
+    assert.ok(deltaEvent && "partial" in deltaEvent);
+    const snapTool = deltaEvent.partial.content[0];
+    assert.ok(snapTool.type === "toolCall");
+    const args = snapTool.arguments as { nested: { query: string; tags: string[] } };
+    assert.equal(args.nested.query, "initial");
+    assert.deepEqual(args.nested.tags, ["a"]);
+
+    const endEvent = events.find((e) => e.type === "toolcall_end");
+    assert.ok(endEvent && "toolCall" in endEvent);
+    const endTool = endEvent.toolCall as typeof snapTool;
+    assert.equal(endTool, endEvent.partial.content[0]);
+    const endArgs = endTool.arguments as { nested: { query: string; tags: string[] } };
+    assert.equal(endArgs.nested.query, "mutated");
+    assert.deepEqual(endArgs.nested.tags, ["a", "b"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

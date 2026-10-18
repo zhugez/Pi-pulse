@@ -299,10 +299,6 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
 let currentModels: ProviderModelConfig[] = ANTIGRAVITY_MODELS;
 let currentRouting: Record<string, AntigravityRouting> = { ...ANTIGRAVITY_ROUTING };
 
-export function getCurrentAntigravityModels(): ProviderModelConfig[] {
-  return currentModels;
-}
-
 export function getCurrentAntigravityRouting(): Record<string, AntigravityRouting> {
   return currentRouting;
 }
@@ -314,11 +310,6 @@ export function getCurrentAntigravityCatalog(): AntigravityCatalog {
 export function applyAntigravityCatalog(catalog: AntigravityCatalog): void {
   currentModels = catalog.models;
   currentRouting = catalog.routing;
-}
-
-export function resetAntigravityCatalogForTests(): void {
-  currentModels = ANTIGRAVITY_MODELS;
-  currentRouting = { ...ANTIGRAVITY_ROUTING };
 }
 
 /** Resolve public model id + thinking effort to Antigravity runtime model id. */
@@ -459,10 +450,6 @@ export function restoreDynamicModelEnums(modelEnums: Record<string, string>): vo
   for (const [wireModelId, modelEnum] of Object.entries(modelEnums)) {
     if (wireModelId && modelEnum) modelEnumCache.set(wireModelId, modelEnum);
   }
-}
-
-export function clearModelEnumCache(): void {
-  modelEnumCache.clear();
 }
 
 export function getThinkingConfig(

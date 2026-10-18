@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,6 +121,39 @@ test("lens: checkFileDiagnostics handles Python code with stdin piping and catch
   assert.equal(badFindings.length, 1);
   assert.equal(badFindings[0].severity, "error");
   assert.match(badFindings[0].message, /syntax error/i);
+});
+
+test("lens: checkFileDiagnostics accurately maps Python syntax error line", async () => {
+  const multiLineBad = `x = 1\ny = 2\ndef broken(:\n    pass\n`;
+  const findings = await checkFileDiagnostics("multiline.py", multiLineBad);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, "multiline.py");
+  assert.equal(findings[0].line, 3);
+  assert.equal(findings[0].severity, "error");
+  assert.match(findings[0].message, /syntax error/i);
+});
+
+test("lens: checkFileDiagnostics catches contextual Python compile errors like return outside function", async () => {
+  const contextualPy = `x = 1\nreturn 42\n`;
+  const findings = await checkFileDiagnostics("contextual.py", contextualPy);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].file, "contextual.py");
+  assert.equal(findings[0].line, 2);
+  assert.equal(findings[0].severity, "error");
+  assert.match(findings[0].message, /'return' outside function/i);
+});
+
+test("lens: compile-only Python code with side effects must not execute", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "lens-python-side-effect-"));
+  const markerFile = join(tempDir, "should-not-exist.txt");
+  try {
+    const sideEffectPy = `import os\nwith open(${JSON.stringify(markerFile)}, "w") as f:\n    f.write("FAIL")\n`;
+    const findings = await checkFileDiagnostics("side_effect.py", sideEffectPy);
+    assert.equal(findings.length, 0);
+    assert.equal(existsSync(markerFile), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("lens: ReadGuardTracker lifecycle accurately distinguishes new vs existing files", async () => {

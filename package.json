@@ -45,6 +45,7 @@
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",
       "./extensions/antigravity/index.ts",
+      "./extensions/gemini-web/index.ts",
       "./extensions/antigravity/features/google-search.ts",
       "./extensions/antigravity/features/generate-image.ts",
       "./node_modules/@dietrichgebert/ponytail/pi-extension/index.js"

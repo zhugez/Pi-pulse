@@ -380,10 +380,6 @@ export async function fetchAvailableRuntimeModel(
   }
 }
 
-export function clearModelCache(): void {
-  modelCache.clear();
-}
-
 async function fetchAvailableModelsFromEndpoint(
   endpoint: string,
   token: string,
@@ -532,10 +528,6 @@ export async function loadCodeAssist(token: string): Promise<string | undefined>
     if (oldestKey !== undefined) projectCache.delete(oldestKey);
   }
   return projectId;
-}
-
-export function clearProjectCache(): void {
-  projectCache.clear();
 }
 
 export function resolveProjectId(opts: {

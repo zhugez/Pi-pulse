@@ -37,14 +37,6 @@ function meaningful(event: AssistantMessageEvent): boolean {
     (block.type === "text" ? block.text.length > 0 : block.type === "thinking" && block.thinking.length > 0));
 }
 
-function copyContent<T>(value: T): T {
-  if (Array.isArray(value)) return value.map(copyContent) as T;
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copyContent(item)])) as T;
-  }
-  return value;
-}
-
 function snapshotMessage(message: AssistantMessage, previous?: AssistantMessage, changedIndex?: number): AssistantMessage {
   const { content, ...metadata } = message;
   const clone: AssistantMessage = {
@@ -52,7 +44,7 @@ function snapshotMessage(message: AssistantMessage, previous?: AssistantMessage,
     content: content.map((block, index) => {
       if (changedIndex !== undefined && index !== changedIndex && previous?.content[index]) return previous.content[index];
       const { partialJson: _partialJson, customInput: _customInput, ...clean } = block as typeof block & { partialJson?: unknown; customInput?: unknown };
-      return copyContent(clean);
+      return structuredClone(clean);
     }),
   };
   clone.provider = PROVIDER_ID;

@@ -23,21 +23,18 @@ function contentHash(filePath: string, content: string): string {
 /** Check Python syntax using child process with explicit stdin piping & timeout */
 async function checkPythonSyntax(content: string, filePath: string, timeoutMs = 5000): Promise<DiagnosticFinding[]> {
   return new Promise((resolve) => {
-    const child = spawn("python3", ["-c", `
-import sys, py_compile, tempfile, os
+    const pythonScript = `
+import sys, traceback
 code = sys.stdin.read()
-with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-    f.write(code)
-    tmp_name = f.name
+filename = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else "<string>"
 try:
-    py_compile.compile(tmp_name, doraise=True)
-except py_compile.PyCompileError as e:
-    sys.stderr.write(str(e))
+    compile(code, filename, "exec")
+except Exception as e:
+    traceback.print_exception(type(e), e, None, file=sys.stderr)
     sys.exit(1)
-finally:
-    if os.path.exists(tmp_name):
-        os.remove(tmp_name)
-`], { timeout: timeoutMs });
+`;
+
+    const child = spawn("python3", ["-c", pythonScript, filePath], { timeout: timeoutMs });
 
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
@@ -58,7 +55,7 @@ finally:
         resolve([]);
         return;
       }
-      const lineMatch = /line\s+(\d+)/i.exec(stderr);
+      const lineMatch = /,\s*line\s+(\d+)/i.exec(stderr) ?? /line\s+(\d+)/i.exec(stderr);
       const line = lineMatch ? Number.parseInt(lineMatch[1], 10) : 1;
       resolve([{
         file: filePath,
@@ -68,6 +65,7 @@ finally:
       }]);
     });
 
+    child.stdin.on("error", () => {});
     // Explicitly write source and close stdin to prevent hangs
     child.stdin.write(content);
     child.stdin.end();

@@ -14,6 +14,7 @@ The collection currently includes two observability extensions, integrated model
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
 - **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
+- **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
@@ -141,6 +142,28 @@ Useful commands:
 
 Model availability depends on the signed-in Google account. It is an unofficial Google integration; review its requested OAuth permissions before approving access.
 
+### Gemini Web provider
+
+Native zero-bridge provider connecting Pi directly to Gemini Web via Google Web RPC. Does not require Go, external bridge processes, or browser automation.
+
+Features:
+- **Private cookie auth**: Import cookie headers directly from a `0600` private file for any Google account slot (`/u/N/`).
+- **Dynamic model discovery**: Discovers available account models dynamically from Gemini Web catalog RPCs.
+- **Prompt-based tool calling**: Translates Pi tool declarations into structured prompts and parses responses with Pi's TypeBox schema validation.
+- **Fail-safe isolation**: Plaintext cookie storage in `~/.pi/agent/gemini-web/credentials.json` (`0700` directory, `0600` file); zero leaks to transcripts or logs.
+- **Buffered output & safe limits**: Discloses buffered response delivery, unmeasured usage placeholders, and planning token limits.
+
+Commands:
+
+```text
+/gemini-web.import <path> --auth-user <N>
+/gemini-web.refresh
+/gemini-web.logout
+/gemini-web.status
+```
+
+See the [Gemini Web Provider Reference](extensions/gemini-web/README.md) for complete setup steps, cookie extraction instructions, limitations, and manual smoke test procedures.
+
 ### Ponytail mode
 
 `@dietrichgebert/ponytail` is installed as a runtime dependency; the `pi-pulse` manifest loads its Pi extension and skills. Ponytail injects its instructions before each agent turn (default mode: `full`).
@@ -199,8 +222,9 @@ Runtime state is stored under `~/.pi/agent/`:
 - `live-throughput-prefs.json`
 - `auth.json` (Antigravity and Codex Pool OAuth marker credentials managed by Pi)
 - `antigravity-accounts.json` (linked Antigravity accounts)
+- `gemini-web/credentials.json` (stored Gemini Web cookie credentials, mode 0600 in 0700 dir)
 
-The `codex-accounts.json`, `auth.json`, and `antigravity-accounts.json` files contain sensitive access and refresh tokens. Never commit, share, or paste their contents into issues.
+The `codex-accounts.json`, `auth.json`, `antigravity-accounts.json`, and `gemini-web/credentials.json` files contain sensitive credentials. Never commit, share, or paste their contents into issues.
 
 ## License
 
