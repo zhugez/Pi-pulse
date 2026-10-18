@@ -8,6 +8,7 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
+- **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
 - **Code Mode (`code_exec`)** — programmatically orchestrate file reads, shell commands, and data processing in an async sandbox without context bloat.
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
@@ -16,6 +17,15 @@ The collection currently includes two observability extensions, integrated model
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
+
+### Code Lens (`code_inspect`)
+
+Native in-flight code intelligence and diagnostics for Pi without external heavyweight binaries:
+
+- **In-flight diagnostics feedback**: Automatically validates syntax and diagnostics immediately upon file edits (`JSON`, `JS`, `TS`, `Python`) and attaches actionable findings into the tool result.
+- **Read-guard**: Tracks session file reads and alerts the agent whenever an existing file is modified without being read first, eliminating blind overwrites.
+- **Symbol inspection**: The `code_inspect` tool extracts top-level functions, classes, interfaces, and methods with line numbers across TypeScript, JavaScript, Python, Go, and Rust without dumping the entire file into context.
+- **Slash commands**: `/lens check <file>`, `/lens symbols <file>`, `/lens stats`.
 
 ### Code Mode (`code_exec`)
 
