@@ -388,6 +388,41 @@ test("formatUsageDetails lists every window with resets, plan, and freshness", (
 	assert.equal(lines[3], "Updated 5m ago");
 });
 
+test("formatUsageDetails renders multi-account pooled breakdown", () => {
+	const now = Date.parse("2026-09-06T12:00:00Z");
+	const text = formatUsageDetails(
+		{
+			windows: { "3p-5h": 0, "3p-weekly": 100 },
+			plan: "Pro",
+			accounts: [
+				{
+					id: "tester@gmail.com",
+					active: true,
+					plan: "Pro",
+					windows: { "3p-5h": 0, "3p-weekly": 100 },
+					resets: { "3p-5h": now + 5 * 3600_000 },
+				},
+				{
+					id: "other@gmail.com",
+					active: false,
+					cooldown: true,
+					plan: "Pro",
+					windows: { "3p-5h": 100, "3p-weekly": 50 },
+					resets: { "3p-5h": now + 2 * 3600_000 },
+				},
+			],
+		},
+		"antigravity",
+		{ modelId: "gemini-3.8-flash", fetchedAt: now - 60_000, now },
+	);
+	assert.match(text, /Subscription usage — antigravity \(2 accounts pooled\) • gemini-3\.8-flash/);
+	assert.match(text, /\[tester@gmail\.com\] \(active\) • Pro/);
+	assert.match(text, /• 3p-5h: 0% ░░░░░░/);
+	assert.match(text, /\[other@gmail\.com\] \(cooldown\) • Pro/);
+	assert.match(text, /• 3p-5h: 100% ██████/);
+	assert.match(text, /Updated 1m ago/);
+});
+
 test("formatUsageDetails handles missing resets and empty data", () => {
 	const text = formatUsageDetails({ windows: { rolling: 2 } }, "opencode-go", {});
 	assert.match(text, /Subscription usage — opencode-go/);

@@ -45,6 +45,7 @@ import os from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createUsageCache } from "./subscription-usage/cache.ts";
+import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import {
 	asRecord,
 	finiteNumber,
@@ -53,6 +54,13 @@ import {
 	type UsageBalance,
 	type UsageData,
 } from "./subscription-usage/data.ts";
+
+const ipv4Dispatcher = new UndiciAgent({
+	connect: {
+		autoSelectFamily: false,
+		family: 4,
+	},
+});
 
 // Preserve the existing extension's exports for callers and tests.
 export { normalizeUsageData, type UsageBalance, type UsageData } from "./subscription-usage/data.ts";
@@ -416,6 +424,42 @@ export function formatUsageDetails(
 	const now = options.now ?? Date.now();
 	const normalized = normalizeUsageData(data);
 	if (!normalized) return `${providerId}: no usage data`;
+
+	if (normalized.accounts && normalized.accounts.length > 1) {
+		const poolLabel = ` (${normalized.accounts.length} accounts pooled)`;
+		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
+		const lines: string[] = [`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`];
+		for (const acc of normalized.accounts) {
+			lines.push("");
+			const badge = acc.active ? " (active)" : acc.cooldown ? " (cooldown)" : "";
+			const planLabel = acc.plan ? ` \u2022 ${acc.plan}` : "";
+			lines.push(`[${acc.id}]${badge}${planLabel}`);
+			const keys = Object.keys(acc.windows).sort((a, b) => {
+				const order = detailWindowOrder(a) - detailWindowOrder(b);
+				return order !== 0 ? order : a.localeCompare(b);
+			});
+			for (const key of keys) {
+				const percent = acc.windows[key];
+				if (typeof percent !== "number") continue;
+				const safe = normalizePercent(percent) ?? 0;
+				const cells = detailBar(safe);
+				const reset = acc.resets?.[key];
+				if (typeof reset === "number" && Number.isFinite(reset)) {
+					const rel = resetLabel(reset, now);
+					const abs = utcStamp(reset);
+					lines.push(`\u2022 ${key}: ${safe}% ${cells} \u2014 resets ${rel} (${abs})`);
+				} else {
+					lines.push(`\u2022 ${key}: ${safe}% ${cells}`);
+				}
+			}
+		}
+		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
+			lines.push("");
+			lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
+		}
+		return lines.join("\n");
+	}
+
 	const headerPlan = normalized.plan ? ` (${normalized.plan})` : "";
 	const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
 	const lines: string[] = [`Subscription usage \u2014 ${providerId}${headerPlan}${headerModel}`];
@@ -1056,6 +1100,7 @@ export function antigravityEndpointCandidates(
 interface CachedAntigravityToken {
 	token: string;
 	expiresAt: number;
+	refreshToken: string;
 }
 let cachedAntigravityToken: CachedAntigravityToken | undefined;
 let cachedAntigravityTier: { plan: string | undefined; cachedAt: number } | undefined;
@@ -1065,10 +1110,14 @@ async function refreshAntigravityToken(
 	refreshToken: string,
 	signal?: AbortSignal,
 ): Promise<string> {
-	if (cachedAntigravityToken && Date.now() < cachedAntigravityToken.expiresAt) {
+	if (
+		cachedAntigravityToken &&
+		cachedAntigravityToken.refreshToken === refreshToken &&
+		Date.now() < cachedAntigravityToken.expiresAt
+	) {
 		return cachedAntigravityToken.token;
 	}
-	const res = await fetch("https://oauth2.googleapis.com/token", {
+	const res = await undiciFetch("https://oauth2.googleapis.com/token", {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
@@ -1078,10 +1127,11 @@ async function refreshAntigravityToken(
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}).toString(),
+		dispatcher: ipv4Dispatcher,
 		signal: anySignal(signal, AbortSignal.timeout(10_000)),
 	});
 	if (!res.ok) {
-		const error = await usageHttpError(res, "antigravity", [refreshToken]);
+		const error = await usageHttpError(res as unknown as Response, "antigravity", [refreshToken]);
 		throw new Error(`token refresh ${error.message}`);
 	}
 	const data = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
@@ -1092,6 +1142,7 @@ async function refreshAntigravityToken(
 	cachedAntigravityToken = {
 		token: data.access_token,
 		expiresAt: Date.now() + Math.max(60_000, (expiresInSec - 60) * 1000),
+		refreshToken,
 	};
 	return data.access_token;
 }
@@ -1100,10 +1151,136 @@ async function refreshAntigravityToken(
 export const antigravityCfg: ProviderCfg = {
 	id: "antigravity",
 	async fetchUsage(signal?: AbortSignal) {
+		let refreshToken: string | undefined;
+		const endpoints = antigravityEndpointCandidates();
+		const baseHeaders: Record<string, string> = {
+			"Content-Type": "application/json",
+			Accept: "application/json",
+			"User-Agent":
+				process.env.ANTIGRAVITY_USER_AGENT || "antigravity/1.15.8 windows/amd64",
+			"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+			"Client-Metadata": JSON.stringify({
+				ideType: "ANTIGRAVITY",
+				platform: "PLATFORM_UNSPECIFIED",
+				pluginType: "GEMINI",
+			}),
+		};
+
+		async function queryQuota(
+			token: string,
+		): Promise<{ response: Response; endpoint: string }> {
+			let lastError: unknown;
+			for (const endpoint of endpoints) {
+				try {
+					const response = await fetch(
+						`${endpoint}/v1internal:retrieveUserQuotaSummary`,
+						{
+							method: "POST",
+							headers: { ...baseHeaders, Authorization: `Bearer ${token}` },
+							body: JSON.stringify({}),
+							signal: anySignal(signal, AbortSignal.timeout(10_000)),
+						},
+					);
+					if (response.ok || !RETRYABLE_ANTIGRAVITY_STATUSES.has(response.status)) {
+						return { response, endpoint };
+					}
+					lastError = await usageHttpError(response, "antigravity", [token, refreshToken ?? ""]);
+				} catch (error) {
+					lastError = error;
+				}
+			}
+			throw lastError instanceof Error
+				? lastError
+				: new Error("all Antigravity quota endpoints failed");
+		}
+
+		function parseQuotaBuckets(quotaJson: unknown): { windows: Record<string, number>; resets: Record<string, number> } {
+			const record = asRecord(quotaJson);
+			const groups = Array.isArray(record?.groups) ? (record.groups as Array<Record<string, unknown>>) : [];
+			const windows: Record<string, number> = {};
+			const resets: Record<string, number> = {};
+			for (const group of groups) {
+				const buckets = Array.isArray(group?.buckets) ? (group.buckets as Array<Record<string, unknown>>) : [];
+				for (const b of buckets) {
+					const k = typeof b.bucketId === "string" ? b.bucketId : typeof b.window === "string" ? b.window : undefined;
+					if (!k) continue;
+					if (typeof b.remainingFraction === "number" && Number.isFinite(b.remainingFraction)) {
+						windows[k] = Math.round((1 - Math.min(1, Math.max(0, b.remainingFraction))) * 100);
+					}
+					if (typeof b.resetTime === "string") {
+						const r = Date.parse(b.resetTime);
+						if (!Number.isNaN(r)) resets[k] = r;
+					}
+				}
+			}
+			return { windows, resets };
+		}
+
+		// Multi-account store support: query all linked accounts if multiple exist
+		const agAccountsPath = path.join(os.homedir(), ".pi", "agent", "antigravity-accounts.json");
+		let agAccountsFile: {
+			activeAccountId?: string;
+			accounts?: Record<string, { accountId?: string; email?: string; access?: string; refresh?: string; expires?: number; cooldownUntil?: number }>;
+		} | undefined;
+		try {
+			if (fs.existsSync(agAccountsPath)) {
+				agAccountsFile = JSON.parse(fs.readFileSync(agAccountsPath, "utf8"));
+			}
+		} catch {}
+
+		if (agAccountsFile?.accounts && Object.keys(agAccountsFile.accounts).length > 1) {
+			const activeId = agAccountsFile.activeAccountId;
+			const accountEntries = Object.entries(agAccountsFile.accounts);
+			const accountItems = (
+				await Promise.all(
+					accountEntries.map(async ([key, acc]) => {
+						let tok = acc.access;
+						if (!tok || (typeof acc.expires === "number" && Date.now() >= acc.expires - 60_000)) {
+							if (acc.refresh) {
+								try {
+									tok = await refreshAntigravityToken(acc.refresh, signal);
+								} catch {}
+							}
+						}
+						if (!tok) return undefined;
+						try {
+							const qRes = await queryQuota(tok);
+							if (!qRes.response.ok) return undefined;
+							const quotaJson = await qRes.response.json();
+							const { windows: accWindows, resets: accResets } = parseQuotaBuckets(quotaJson);
+							if (Object.keys(accWindows).length === 0) return undefined;
+							const isAct = acc.accountId === activeId || acc.email === activeId || key === activeId;
+							const isCool = Boolean(acc.cooldownUntil && acc.cooldownUntil > Date.now());
+							return {
+								id: acc.email || acc.accountId || key,
+								active: isAct,
+								cooldown: isCool,
+								plan: "Pro",
+								windows: accWindows,
+								resets: accResets,
+							};
+						} catch {
+							return undefined;
+						}
+					}),
+				)
+			).filter((a): a is NonNullable<typeof a> => Boolean(a));
+
+			if (accountItems.length > 0) {
+				const primary = accountItems.find((a) => a.active) || accountItems[0];
+				return {
+					windows: primary.windows,
+					plan: primary.plan,
+					resets: primary.resets,
+					accounts: accountItems,
+				};
+			}
+		}
+
+		// Single-account fallback flow
 		const fromEnv =
 			process.env.ANTIGRAVITY_TOKEN || process.env.ANTIGRAVITY_API_KEY;
 		let access = fromEnv?.trim();
-		let refreshToken: string | undefined;
 		let expires = 0;
 
 		if (!access) {
@@ -1130,49 +1307,6 @@ export const antigravityCfg: ProviderCfg = {
 		}
 		if (!access) throw new MissingCredentialError("antigravity access token is unavailable");
 
-		const endpoints = antigravityEndpointCandidates();
-		const headers: Record<string, string> = {
-			Authorization: `Bearer ${access}`,
-			"Content-Type": "application/json",
-			Accept: "application/json",
-			"User-Agent":
-				process.env.ANTIGRAVITY_USER_AGENT || "antigravity/1.15.8 windows/amd64",
-			"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-			"Client-Metadata": JSON.stringify({
-				ideType: "ANTIGRAVITY",
-				platform: "PLATFORM_UNSPECIFIED",
-				pluginType: "GEMINI",
-			}),
-		};
-
-		async function queryQuota(
-			token: string,
-		): Promise<{ response: Response; endpoint: string }> {
-			let lastError: unknown;
-			for (const endpoint of endpoints) {
-				try {
-					const response = await fetch(
-						`${endpoint}/v1internal:retrieveUserQuotaSummary`,
-						{
-							method: "POST",
-							headers: { ...headers, Authorization: `Bearer ${token}` },
-							body: JSON.stringify({}),
-							signal: anySignal(signal, AbortSignal.timeout(10_000)),
-						},
-					);
-					if (response.ok || !RETRYABLE_ANTIGRAVITY_STATUSES.has(response.status)) {
-						return { response, endpoint };
-					}
-					lastError = await usageHttpError(response, "antigravity", [token, refreshToken ?? ""]);
-				} catch (error) {
-					lastError = error;
-				}
-			}
-			throw lastError instanceof Error
-				? lastError
-				: new Error("all Antigravity quota endpoints failed");
-		}
-
 		let quotaResult = await queryQuota(access);
 		if (quotaResult.response.status === 401 && refreshToken) {
 			await quotaResult.response.body?.cancel().catch(() => undefined);
@@ -1186,38 +1320,8 @@ export const antigravityCfg: ProviderCfg = {
 		if (!resQuota.ok) {
 			throw await usageHttpError(resQuota, "antigravity", [access, refreshToken ?? ""]);
 		}
-		const quotaJson = (await resQuota.json()) as {
-			groups?: Array<{
-				displayName?: string;
-				buckets?: Array<{
-					bucketId?: string;
-					displayName?: string;
-					window?: string;
-					resetTime?: string;
-					remainingFraction?: number;
-				}>;
-			}>;
-		};
-
-		const windows: Record<string, number> = {};
-		const resets: Record<string, number> = {};
-		for (const group of quotaJson.groups || []) {
-			for (const b of group.buckets || []) {
-				const k = b.bucketId || b.window;
-				if (!k) continue;
-				if (
-					typeof b.remainingFraction === "number" &&
-					Number.isFinite(b.remainingFraction)
-				) {
-					const remaining = Math.min(1, Math.max(0, b.remainingFraction));
-					windows[k] = Math.round((1 - remaining) * 100);
-				}
-				if (b.resetTime) {
-					const r = Date.parse(b.resetTime);
-					if (!Number.isNaN(r)) resets[k] = r;
-				}
-			}
-		}
+		const quotaJson = await resQuota.json();
+		const { windows, resets } = parseQuotaBuckets(quotaJson);
 
 		if (Object.keys(windows).length === 0) throw new Error("no usage data");
 
@@ -1229,7 +1333,7 @@ export const antigravityCfg: ProviderCfg = {
 			try {
 				const resAssist = await fetch(`${baseUrl}/v1internal:loadCodeAssist`, {
 					method: "POST",
-					headers: { ...headers, Authorization: `Bearer ${access}` },
+					headers: { ...baseHeaders, Authorization: `Bearer ${access}` },
 					body: JSON.stringify({
 						metadata: {
 							ideType: "ANTIGRAVITY",

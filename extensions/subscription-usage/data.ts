@@ -4,12 +4,22 @@ export interface UsageBalance {
 	total: number;
 }
 
+export interface AccountUsageItem {
+	id: string;
+	active?: boolean;
+	cooldown?: boolean;
+	plan?: string;
+	windows: Record<string, number>;
+	resets?: Record<string, number>;
+}
+
 export interface UsageData {
 	windows: Record<string, number>;
 	plan?: string;
 	resets?: Record<string, number>;
 	balance?: UsageBalance;
 	resetsLeft?: number;
+	accounts?: AccountUsageItem[];
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -52,6 +62,34 @@ function normalizeResetsLeft(value: unknown): number | undefined {
 	return count !== undefined && count >= 0 ? Math.floor(count) : undefined;
 }
 
+function normalizeAccounts(value: unknown): AccountUsageItem[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const items: AccountUsageItem[] = [];
+	for (const raw of value) {
+		const rec = asRecord(raw);
+		if (!rec || typeof rec.id !== "string" || !rec.id) continue;
+		const winRecord = asRecord(rec.windows);
+		if (!winRecord) continue;
+		const windows = Object.fromEntries(
+			Object.entries(winRecord).flatMap(([k, p]) => {
+				const norm = normalizePercent(p);
+				return norm === undefined ? [] : [[k, norm] as const];
+			}),
+		);
+		const resets = normalizeResets(rec.resets);
+		const plan = typeof rec.plan === "string" ? rec.plan.trim() : undefined;
+		items.push({
+			id: rec.id.trim(),
+			active: Boolean(rec.active),
+			cooldown: Boolean(rec.cooldown),
+			...(plan ? { plan } : {}),
+			windows,
+			...(resets ? { resets } : {}),
+		});
+	}
+	return items.length > 0 ? items : undefined;
+}
+
 /** Decode provider or disk-cache data before it reaches rendering or scheduling. */
 export function normalizeUsageData(value: unknown): UsageData | undefined {
 	const record = asRecord(value);
@@ -72,11 +110,13 @@ export function normalizeUsageData(value: unknown): UsageData | undefined {
 	const plan = typeof record?.plan === "string" ? record.plan.trim() : undefined;
 	const resets = normalizeResets(record?.resets);
 	const resetsLeft = normalizeResetsLeft(record?.resetsLeft);
+	const accounts = normalizeAccounts(record?.accounts);
 	return {
 		windows,
 		...(plan ? { plan } : {}),
 		...(resets ? { resets } : {}),
 		...(balance ? { balance } : {}),
 		...(resetsLeft !== undefined ? { resetsLeft } : {}),
+		...(accounts ? { accounts } : {}),
 	};
 }
