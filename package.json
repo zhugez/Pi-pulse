@@ -49,6 +49,7 @@
       "./extensions/antigravity/features/google-search.ts",
       "./extensions/antigravity/features/generate-image.ts",
       "./extensions/claude-cli/index.ts",
+      "./extensions/exomind/index.ts",
       "./node_modules/@dietrichgebert/ponytail/pi-extension/index.js"
     ],
     "skills": [

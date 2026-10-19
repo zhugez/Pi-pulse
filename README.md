@@ -15,6 +15,7 @@ The collection currently includes two observability extensions, integrated model
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
 - **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Claude Code CLI provider** — use your Claude Pro/Max subscription from Pi coding agent via the local authenticated `claude` CLI with MCP tool bridge.
+- **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
