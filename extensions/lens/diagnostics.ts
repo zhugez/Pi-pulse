@@ -1,8 +1,13 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const BUNDLED_TSC = fileURLToPath(new URL("../../node_modules/.bin/tsc", import.meta.url));
+const TSC_BIN = existsSync(BUNDLED_TSC) ? BUNDLED_TSC : "tsc";
 
 export interface DiagnosticFinding {
   file: string;
@@ -81,13 +86,13 @@ async function checkTsJsSyntax(content: string, filePath: string, timeoutMs = 80
 
   try {
     const findings: DiagnosticFinding[] = await new Promise((resolve) => {
-      const args = ["--noEmit", "--ignoreConfig", "--allowJs"];
+      const args = ["--noEmit", "--ignoreConfig", "--allowJs", "--noLib", "--noResolve"];
       if (ext === ".tsx" || ext === ".jsx") {
         args.push("--jsx", "preserve");
       }
       args.push(tmpFile);
 
-      const child = spawn("tsc", args, { timeout: timeoutMs });
+      const child = spawn(TSC_BIN, args, { timeout: timeoutMs });
       let stdout = "";
       let stderr = "";
 

@@ -175,8 +175,7 @@ export default function registerCodeMode(pi: ExtensionAPI): void {
       });
 
       const execHelper = async (cmd: string, args: string[] = []) => {
-        const fullCmd = args.length > 0 ? `${cmd} ${args.join(" ")}` : cmd;
-        const res = await pi.exec("bash", ["-c", fullCmd]);
+        const res = args.length > 0 ? await pi.exec(cmd, args) : await pi.exec("bash", ["-c", cmd]);
         return {
           stdout: res.stdout,
           stderr: res.stderr,
@@ -219,8 +218,7 @@ export default function registerCodeMode(pi: ExtensionAPI): void {
 
       try {
         const execHelper = async (cmd: string, cmdArgs: string[] = []) => {
-          const fullCmd = cmdArgs.length > 0 ? `${cmd} ${cmdArgs.join(" ")}` : cmd;
-          const res = await pi.exec("bash", ["-c", fullCmd]);
+          const res = cmdArgs.length > 0 ? await pi.exec(cmd, cmdArgs) : await pi.exec("bash", ["-c", cmd]);
           return { stdout: res.stdout, stderr: res.stderr, exitCode: res.code };
         };
 
