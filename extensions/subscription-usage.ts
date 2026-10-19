@@ -498,7 +498,7 @@ export function formatUsageDetails(
 		const reset = normalized.resets?.[key];
 		if (typeof reset === "number" && Number.isFinite(reset)) {
 			const rel = resetLabel(reset, now);
-			const abs = providerId === "antigravity" ? vnStamp(reset) : utcStamp(reset);
+			const abs = vnStamp(reset);
 			lines.push(`\u2022 ${key}: ${safe}% ${cells} \u2014 resets ${rel} (${abs})`);
 		} else {
 			lines.push(`\u2022 ${key}: ${safe}% ${cells}`);

@@ -383,8 +383,8 @@ test("formatUsageDetails lists every window with resets, plan, and freshness", (
 	const lines = text.split("\n");
 	assert.equal(lines[0], "Subscription usage — openai-codex (plus) • gpt-5");
 	// Preferred order: 5h before weekly regardless of input order.
-	assert.match(lines[1], /• 5h: 12\.5% .* — resets ~4h \(2026-09-06 16:00 UTC\)/);
-	assert.match(lines[2], /• weekly: 51% .* — resets ~3d \(2026-09-09 12:00 UTC\)/);
+	assert.match(lines[1], /• 5h: 12\.5% .* — resets ~4h \(2026-09-06 23:00 GMT\+7\)/);
+	assert.match(lines[2], /• weekly: 51% .* — resets ~3d \(2026-09-09 19:00 GMT\+7\)/);
 	assert.equal(lines[3], "Updated 5m ago");
 });
 
