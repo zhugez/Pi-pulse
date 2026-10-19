@@ -62,7 +62,7 @@ function systemPromptFilePath(sessionKey?: string): string {
   const suffix = sessionKey
     ? `-${sessionKey.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128)}`
     : "";
-  return runtimeFile(`pi-claude-cli-sysprompt${suffix}.txt`);
+  return runtimeFile(`claude-cli-sysprompt${suffix}.txt`);
 }
 
 export function spawnClaude(
@@ -451,7 +451,7 @@ export function validateCliAuth(): boolean {
 
 function warnUnauth(): void {
   console.warn(
-    "[pi-claude-cli] Claude CLI is not authenticated. " +
+    "[claude-cli] Claude CLI is not authenticated. " +
       "Run `claude` and use `/login` to authenticate.",
   );
 }

@@ -1,5 +1,5 @@
 /**
- * Pi extension entry point for pi-claude-cli.
+ * Pi extension entry point for claude-cli.
  *
  * Registers a custom provider that routes LLM calls through the Claude Code CLI
  * subprocess using stream-json NDJSON protocol.
@@ -43,7 +43,7 @@ process.on("beforeExit", () => {
   void retireAllCliProcesses();
 });
 
-const PROVIDER_ID = "pi-claude-cli";
+const PROVIDER_ID = "claude-cli";
 
 /**
  * Status key carrying account rate-limit state to the front-end. Neutral
@@ -157,13 +157,13 @@ function ensureMcpSchema(
     mcpSchema = { schemaPath, version };
     if (changed) {
       console.error(
-        `[pi-claude-cli] MCP config generated with ${toolDefs.length} custom tool(s)`,
+        `[claude-cli] MCP config generated with ${toolDefs.length} custom tool(s)`,
       );
     }
   } catch (err) {
     if (usesPiContext()) throw err;
     console.warn(
-      "[pi-claude-cli] MCP config generation failed, custom tools unavailable:",
+      "[claude-cli] MCP config generation failed, custom tools unavailable:",
       err,
     );
   }
@@ -184,7 +184,7 @@ async function ensureHandoffSocket(): Promise<string | undefined> {
     handoffSocket = await startHandoffBroker();
   } catch (err) {
     console.warn(
-      "[pi-claude-cli] handoff socket unavailable, custom tools fall back to interrupt-and-resume:",
+      "[claude-cli] handoff socket unavailable, custom tools fall back to interrupt-and-resume:",
       err,
     );
   }
@@ -256,7 +256,7 @@ export default function (pi: ExtensionAPI) {
     // default stream fn (pi-agent-core setDefaultStreamFn) resolves
     // model.api against pi-ai's global api registry instead — print mode
     // and nested agent loops take that path and would throw
-    // "No API provider registered for api: pi-claude-cli" (#32).
+    // "No API provider registered for api: claude-cli" (#32).
     // Register the custom api id there too.
     registerApiProvider(
       { api: PROVIDER_ID as any, stream: streamFn, streamSimple: streamFn },
@@ -271,13 +271,13 @@ export default function (pi: ExtensionAPI) {
     });
 
     pi.registerProvider(PROVIDER_ID, {
-      baseUrl: "pi-claude-cli",
+      baseUrl: "claude-cli",
       apiKey: "unused",
-      api: "pi-claude-cli",
+      api: "claude-cli",
       models,
       streamSimple: streamFn,
     });
   } catch (err) {
-    console.error(`[pi-claude-cli] Failed to register provider:`, err);
+    console.error(`[claude-cli] Failed to register provider:`, err);
   }
 }

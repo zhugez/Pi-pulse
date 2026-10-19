@@ -1,12 +1,12 @@
-# pi-claude-cli
+# claude-cli
 
 **Use your Claude Pro/Max subscription from the [pi coding agent](https://github.com/earendil-works/pi).** The official Claude Code CLI handles authentication and model access. pi owns the prompt, tools, conversation and compaction.
 
 ```bash
-pi install npm:@saccolabs/pi-claude-cli
+pi install npm:@saccolabs/claude-cli
 ```
 
-Pick a model under `pi-claude-cli` with `/model`. The same default works in pi's terminal and [Phosphor](https://github.com/agustinsacco/Phosphor). No separate minimal mode or configuration is required.
+Pick a model under `claude-cli` with `/model`. The same default works in pi's terminal and [Phosphor](https://github.com/agustinsacco/Phosphor). No separate minimal mode or configuration is required.
 
 Requires Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.263+). Tested with pi 0.87.1 and Claude Code 2.1.280. Subscription credentials stay in the official CLI; no API key extraction.
 

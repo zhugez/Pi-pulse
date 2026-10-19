@@ -157,7 +157,7 @@ const MAX_AGENT_CONTINUATIONS = 32;
  * ~315k read on every healthy cycle of the same session.
  *
  * So a `result` that carried no content AND spent no tokens is a cycle
- * boundary, not the end of the episode (agustinsacco/pi-claude-cli#33,
+ * boundary, not the end of the episode (agustinsacco/claude-cli#33,
  * folded in here). A persistent process makes the orphaning rare — the
  * process that launched the task usually still runs — but a retire-and-resume
  * can still hit it. Bounded below, and by the inactivity timer, which still
@@ -232,14 +232,14 @@ type StreamViaCLiOptions = SimpleStreamOptions & {
 /**
  * The mapped CLI session is stale when pi's history moved on without it:
  * an assistant turn from another provider (model switch) after — or with no —
- * pi-claude-cli turn means the CLI never saw that exchange. Resuming would
+ * claude-cli turn means the CLI never saw that exchange. Resuming would
  * answer from a conversation missing turns, so reimport instead.
  */
 function cliSessionIsStale(messages: any[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role !== "assistant") continue;
-    return !(m?.provider === "pi-claude-cli" || m?.api === "pi-claude-cli");
+    return !(m?.provider === "claude-cli" || m?.api === "claude-cli");
   }
   return false; // no assistant turns at all: nothing to be behind
 }
@@ -1107,7 +1107,7 @@ export function streamViaCli(
       const outcome = await runOnce(false);
       if (outcome === "resume-miss") {
         console.error(
-          "[pi-claude-cli] CLI session missing for --resume — importing pi history into a fresh CLI session",
+          "[claude-cli] CLI session missing for --resume — importing pi history into a fresh CLI session",
         );
         await runOnce(true);
       }

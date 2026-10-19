@@ -39,7 +39,7 @@
  *   tool's own `description`. Captured 2026-08-28 on claude 2.1.231: a
  *   sub-agent's internal `find` surfaced as `[Claude Code · Task
  *   {"status":"started","description":"Search for local source checkout of
- *   pi-claude-cli"}]` — a fourth "agent" in a three-agent fan-out. Only
+ *   claude-cli"}]` — a fourth "agent" in a three-agent fan-out. Only
  *   `local_agent` and `remote_agent` are sub-agents.
  * - **Not every notification belongs to this episode.** `task_notification`
  *   carries no `description` and no `task_type` — only `task_id`. A task

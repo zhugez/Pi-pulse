@@ -174,7 +174,7 @@ export function createEventBridge(
   const output: AssistantMessage = {
     role: "assistant" as const,
     content: [] as (TextContent | ThinkingContent | ToolCall)[],
-    api: "pi-claude-cli",
+    api: "claude-cli",
     provider: model.provider,
     model: model.id,
     usage: {

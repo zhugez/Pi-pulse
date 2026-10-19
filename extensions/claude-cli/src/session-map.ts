@@ -18,7 +18,7 @@ import { isEphemeral } from "./env-flag.js";
 function stateDir(): string {
   return (
     process.env.PI_CLAUDE_CLI_STATE_DIR ||
-    join(homedir(), ".pi", "agent", "pi-claude-cli")
+    join(homedir(), ".pi", "agent", "claude-cli")
   );
 }
 

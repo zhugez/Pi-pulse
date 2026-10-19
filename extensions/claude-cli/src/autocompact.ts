@@ -89,7 +89,7 @@ export function resolveAutocompact(
   const tokens = parseAutocompactTokens(raw);
   if (tokens === undefined || tokens < MIN_TOKENS || tokens > MAX_TOKENS) {
     console.warn(
-      `[pi-claude-cli] PI_CLAUDE_CLI_AUTOCOMPACT=${JSON.stringify(raw)} is not ` +
+      `[claude-cli] PI_CLAUDE_CLI_AUTOCOMPACT=${JSON.stringify(raw)} is not ` +
         `'auto', 'off', or a window between 100k and 1M — using the default ` +
         `${DEFAULT_AUTOCOMPACT_TOKENS} tokens`,
     );
