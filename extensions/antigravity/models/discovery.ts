@@ -6,9 +6,13 @@ import type {
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { getApiKey } from "../auth/index.js";
+import {
+  getApiKey,
+  listAccountApiKeys,
+  recordAccountModelCatalog,
+} from "../auth/index.js";
 import { DEFAULT_ENDPOINT, fetchAvailableModelsCatalog, parseApiKey } from "../client/index.js";
-import { ANTIGRAVITY_API } from "../types/types.js";
+import { ANTIGRAVITY_API, type ModelInfoRaw } from "../types/types.js";
 import { antigravityEnv, isRecord } from "../utils/util.js";
 import { buildAntigravityCatalog, resolvedCatalog, type AntigravityCatalog } from "./grouping.js";
 import {
@@ -64,12 +68,49 @@ export async function discoverAntigravityModels(
 ): Promise<AntigravityCatalog> {
   const creds = parseApiKey(apiKey);
   const available = await fetchAvailableModelsCatalog(creds.token, creds.projectId, signal);
-  const models = available.data.models;
-  if (!models || Object.keys(models).length === 0) {
+  const mergedModels: Record<string, ModelInfoRaw> = {};
+
+  const absorbAccountModels = (
+    token: string,
+    accountModels: Record<string, ModelInfoRaw> | undefined,
+  ) => {
+    if (!accountModels) return;
+    recordAccountModelCatalog(token, accountModels);
+    registerDiscoveredModelEnums(accountModels);
+    for (const [modelId, info] of Object.entries(accountModels)) {
+      if (/-disabled$/i.test(modelId) || info?.disabled === true) continue;
+      mergedModels[modelId] = info;
+    }
+  };
+
+  absorbAccountModels(creds.token, available.data.models);
+
+  // Also query any additional linked accounts so Ultra-tier models (e.g. Gemini 4 Argon,
+  // Claude 5.5) remain in the catalog and per-account model support stays fresh even
+  // when a Pro account is currently active in auth.json.
+  try {
+    const extraKeys = (await listAccountApiKeys()).filter((k) => k.token !== creds.token);
+    if (extraKeys.length > 0) {
+      const extraResults = await Promise.allSettled(
+        extraKeys.map(async (k) => ({
+          token: k.token,
+          res: await fetchAvailableModelsCatalog(k.token, k.projectId, signal),
+        })),
+      );
+      for (const item of extraResults) {
+        if (item.status === "fulfilled") {
+          absorbAccountModels(item.value.token, item.value.res.data.models);
+        }
+      }
+    }
+  } catch {
+    // Secondary account discovery is best-effort
+  }
+
+  if (Object.keys(mergedModels).length === 0) {
     return { models: [], routing: {} };
   }
-  registerDiscoveredModelEnums(models);
-  return buildAntigravityCatalog(models, fallbackCatalog());
+  return buildAntigravityCatalog(mergedModels, fallbackCatalog());
 }
 
 export async function refreshAntigravityModels(

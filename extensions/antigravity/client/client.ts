@@ -61,7 +61,7 @@ export function endpointCandidates(): string[] {
 }
 
 const DEFAULT_USER_AGENT =
-  "antigravity/cli/1.2.4 (aidev_client; os_type=linux; arch=amd64; cl=982146307; auth_method=consumer)";
+  "antigravity/cli/1.4.2 (aidev_client; os_type=linux; arch=amd64; cl=1001591392; auth_method=consumer)";
 
 /** Default User-Agent matching pure Antigravity CLI wire fingerprint. */
 export function defaultUserAgent(): string {
@@ -191,12 +191,20 @@ function summarizeModelCandidate(value: unknown): string {
 
 /** Runtime ids look like gemini-*, claude-*, gpt-oss-*, never MODEL_PLACEHOLDER_* enums. */
 export function isUsableRuntimeModelId(id: string): boolean {
-  return /^(gemini-|claude-|gpt-oss-)/i.test(id) && !/\s/.test(id) && !/^MODEL_/i.test(id);
+  return (
+    /^(gemini-|claude-|gpt-oss-)/i.test(id) &&
+    !/\s/.test(id) &&
+    !/^MODEL_/i.test(id) &&
+    !/-disabled$/i.test(id)
+  );
 }
 
 function buildModelMatchRegex(requestedId: string): RegExp {
   const req = requestedId.toLowerCase();
   // Display names from fetchAvailableModels (keys are the real runtime ids):
+  //   gemini-4-argon-low         → "Gemini 4 Argon (Low)"
+  //   gemini-4-argon-medium      → "Gemini 4 Argon (Medium)"
+  //   gemini-4-argon-high        → "Gemini 4 Argon (High)"
   //   gemini-3.8-flash-low       → "Gemini 3.8 Flash (Low)"
   //   gemini-3.8-flash-medium    → "Gemini 3.8 Flash (Medium)"
   //   gemini-3.8-flash-high      → "Gemini 3.8 Flash (High)"
@@ -209,6 +217,10 @@ function buildModelMatchRegex(requestedId: string): RegExp {
   //   gemini-3.5-flash-extra-low → "Gemini 3.5 Flash (Low)"
   //   gemini-3.5-flash-low       → "Gemini 3.5 Flash (Medium)"
   //   gemini-3-flash-agent       → "Gemini 3.5 Flash (High)"
+  if (req === "gemini-4-argon-low") return /gemini[- ]4[- ]argon \(low\)/i;
+  if (req === "gemini-4-argon-medium") return /gemini[- ]4[- ]argon \(medium\)/i;
+  if (req === "gemini-4-argon-high" || req === "gemini-4-argon")
+    return /gemini[- ]4[- ]argon \(high\)/i;
   if (req === "gemini-3.8-flash-low") return /gemini[- ]3\.8[- ]flash \(low\)/i;
   if (req === "gemini-3.8-flash-medium") return /gemini[- ]3\.8[- ]flash \(medium\)/i;
   if (req === "gemini-3.8-flash-high") return /gemini[- ]3\.8[- ]flash \(high\)/i;
@@ -223,6 +235,14 @@ function buildModelMatchRegex(requestedId: string): RegExp {
     return /gemini[- ]3\.5[- ]flash \(medium\)/i;
   if (req === "gemini-3.5-flash-high" || req === "gemini-3-flash-agent")
     return /gemini[- ]3\.5[- ]flash \(high\)/i;
+  if (req === "claude-opus-5-5-low") return /claude.*opus.*5\.5 \(low\)/i;
+  if (req === "claude-opus-5-5-medium") return /claude.*opus.*5\.5 \(medium\)/i;
+  if (req === "claude-opus-5-5-high") return /claude.*opus.*5\.5 \(high\)/i;
+  if (req.includes("claude-opus-5-5")) return /claude.*opus.*5\.5/i;
+  if (req === "claude-sonnet-5-5-low") return /claude.*sonnet.*5\.5 \(low\)/i;
+  if (req === "claude-sonnet-5-5-medium") return /claude.*sonnet.*5\.5 \(medium\)/i;
+  if (req === "claude-sonnet-5-5-high") return /claude.*sonnet.*5\.5 \(high\)/i;
+  if (req.includes("claude-sonnet-5-5")) return /claude.*sonnet.*5\.5/i;
   if (req.includes("claude-opus-4-6")) return /claude.*opus.*4\.6/i;
   if (req.includes("claude-sonnet-4-6")) return /claude.*sonnet.*4\.6/i;
   if (req.includes("gpt-oss-120b")) return /gpt.*oss.*120b/i;
@@ -262,13 +282,19 @@ function findDynamicModel(value: unknown, requestedId: string): DynamicModelInfo
 
   if (isRecord(value) && isRecord(value.models)) {
     const modelsMap = value.models;
-    if (isUsableRuntimeModelId(requestedId) && requestedId in modelsMap) {
-      return dynamicModelFromInfo(requestedId, modelsMap[requestedId]);
+    const directInfo = modelsMap[requestedId];
+    if (
+      isUsableRuntimeModelId(requestedId) &&
+      requestedId in modelsMap &&
+      !(isRecord(directInfo) && directInfo.disabled === true)
+    ) {
+      return dynamicModelFromInfo(requestedId, directInfo);
     }
 
     const targetRegex = buildModelMatchRegex(requestedId);
     for (const [modelId, info] of Object.entries(modelsMap)) {
       if (!isUsableRuntimeModelId(modelId)) continue;
+      if (isRecord(info) && info.disabled === true) continue;
       if (targetRegex.test(modelId)) return dynamicModelFromInfo(modelId, info);
       if (isRecord(info)) {
         const label = info.label ?? info.displayName ?? info.name;

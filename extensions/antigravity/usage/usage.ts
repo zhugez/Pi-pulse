@@ -148,7 +148,14 @@ function parseModels(data: unknown): {
   const models: ModelQuotaRow[] = [];
   for (const [modelId, info] of Object.entries(modelsObj)) {
     if (!info || !isRecord(info)) continue;
-    if (info.isInternal || String(modelId).startsWith("chat_")) continue;
+    if (
+      info.isInternal ||
+      info.disabled === true ||
+      String(modelId).startsWith("chat_") ||
+      String(modelId).endsWith("-disabled")
+    ) {
+      continue;
+    }
     const qi = isRecord(info.quotaInfo) ? info.quotaInfo : {};
     models.push({
       modelId,

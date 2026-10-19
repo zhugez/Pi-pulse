@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   ANTIGRAVITY_IMAGE_API,
@@ -10,6 +12,7 @@ import {
 import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import {
   activateAccount,
+  agentDir,
   getApiKey,
   isAccountRotationEnabled,
   listAccounts,
@@ -28,6 +31,7 @@ import {
   applyAntigravityCatalog,
   discoverAntigravityModels,
   getCurrentAntigravityCatalog,
+  hydrateAntigravityCatalog,
   PROVIDER_ID,
   PROVIDER_NAME,
   refreshAntigravityModels,
@@ -139,6 +143,14 @@ function registerCompatApiProvider(): void {
 export default function (pi: ExtensionAPI): void {
   registerCompatApiProvider();
 
+  try {
+    const storePath = join(agentDir(), "models-store.json");
+    if (existsSync(storePath)) {
+      const store = JSON.parse(readFileSync(storePath, "utf8"));
+      hydrateAntigravityCatalog(store.antigravity);
+    }
+  } catch {}
+
   const initialCatalog = getCurrentAntigravityCatalog();
 
   const providerConfig = {
@@ -173,6 +185,26 @@ export default function (pi: ExtensionAPI): void {
     providerConfig as unknown as Parameters<typeof pi.registerProvider>[1],
   );
 
+  async function refreshCatalog(ctx: ExtensionCommandContext, apiKey: string): Promise<void> {
+    if (typeof ctx.modelRegistry?.refresh === "function") {
+      const result = await ctx.modelRegistry.refresh({
+        force: true,
+        providers: [PROVIDER_ID],
+      });
+      if (result?.errors?.has(PROVIDER_ID)) throw result.errors.get(PROVIDER_ID)!;
+    } else {
+      const discovered = await discoverAntigravityModels(apiKey);
+      if (discovered.models.length > 0) {
+        const next = resolvedCatalog(discovered, getCurrentAntigravityCatalog());
+        applyAntigravityCatalog(next);
+        pi.registerProvider(PROVIDER_ID, {
+          ...providerConfig,
+          models: [...next.models, ...ANTIGRAVITY_IMAGE_MODELS],
+        } as unknown as Parameters<typeof pi.registerProvider>[1]);
+      }
+    }
+  }
+
   pi.registerCommand("antigravity.usage", {
     description: "Show Antigravity shared quota pools (Gemini / Claude+GPT, 5h + weekly)",
     handler: async (_args, ctx) => {
@@ -195,9 +227,16 @@ export default function (pi: ExtensionAPI): void {
       try {
         if (command.startsWith("switch ")) {
           const account = await activateAccount(command.slice("switch ".length));
+          try {
+            await refreshCatalog(ctx, getApiKey(account));
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            emitCommandOutput(ctx, `Account switched, but model refresh failed: ${redactSecrets(msg)}. Retry /antigravity.refresh.`, "error");
+            return;
+          }
           emitCommandOutput(
             ctx,
-            `Active Antigravity account: ${account.email || account.accountId}`,
+            `Active Antigravity account: ${account.email || account.accountId} (rotation disabled, models refreshed)`,
           );
           return;
         }
@@ -259,21 +298,7 @@ export default function (pi: ExtensionAPI): void {
       }
       if (ctx.hasUI) ctx.ui.notify("Refreshing Antigravity models…", "info");
       try {
-        if (typeof ctx.modelRegistry?.refresh === "function") {
-          const result = await ctx.modelRegistry.refresh({
-            force: true,
-            providers: [PROVIDER_ID],
-          });
-          if (result?.errors?.has(PROVIDER_ID)) {
-            throw result.errors.get(PROVIDER_ID)!;
-          }
-        } else {
-          const discovered = await discoverAntigravityModels(apiKey);
-          const next = resolvedCatalog(discovered, getCurrentAntigravityCatalog());
-          if (discovered.models.length > 0) {
-            applyAntigravityCatalog(next);
-          }
-        }
+        await refreshCatalog(ctx, apiKey);
         const catalog = getCurrentAntigravityCatalog();
         const count = catalog.models.length;
         const sample = catalog.models

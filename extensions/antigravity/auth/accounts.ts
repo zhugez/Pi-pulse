@@ -16,6 +16,8 @@ export type StoredAccount = AntigravityOAuthCredentials & {
   addedAt: number;
   lastUsedAt: number;
   cooldownUntil?: number;
+  supportedModels?: string[];
+  unsupportedModels?: string[];
 };
 
 type AccountsFile = {
@@ -33,7 +35,17 @@ export type AccountSummary = {
   cooldown?: boolean;
 };
 
-function agentDir(): string {
+export function normalizeModelFamily(modelId: string): string {
+  const lower = modelId.trim().toLowerCase();
+  if (lower === "gemini-3-flash-agent") return "gemini-3.5-flash";
+  if (lower === "gemini-pro-agent") return "gemini-3.1-pro";
+  return lower.replace(
+    /-(?:extra-low|extra-high|minimal|low|medium|high|thinking|tiered|disabled)$/i,
+    "",
+  );
+}
+
+export function agentDir(): string {
   return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 }
 
@@ -117,14 +129,26 @@ function accountIdFor(credentials: OAuthCredentials): string {
 function accountFromCredentials(
   credentials: AntigravityOAuthCredentials,
   existing?: StoredAccount,
+  preserveLastUsedAt = false,
 ): StoredAccount {
   const now = Date.now();
+  const useExistingToken =
+    existing &&
+    existing.access &&
+    typeof existing.expires === "number" &&
+    existing.expires > (credentials.expires || 0);
   return {
     ...credentials,
+    access: useExistingToken ? existing.access : credentials.access,
+    expires: useExistingToken ? existing.expires : credentials.expires,
+    projectId: credentials.projectId || existing?.projectId,
+    email: credentials.email || existing?.email,
     accountId: existing?.accountId || accountIdFor(credentials),
     addedAt: existing?.addedAt || now,
-    lastUsedAt: now,
+    lastUsedAt: preserveLastUsedAt && existing ? existing.lastUsedAt : now,
     cooldownUntil: existing?.cooldownUntil,
+    supportedModels: existing?.supportedModels,
+    unsupportedModels: existing?.unsupportedModels,
   };
 }
 
@@ -209,9 +233,11 @@ export function syncCurrentAuth(): void {
   if (!credentials) return;
   const store = loadAccountStore();
   const existing = findAccount(store, credentials);
-  const account = accountFromCredentials(credentials, existing);
+  const account = accountFromCredentials(credentials, existing, true);
   store.accounts[account.accountId] = account;
-  store.activeAccountId = account.accountId;
+  if (!store.activeAccountId || !store.accounts[store.activeAccountId]) {
+    store.activeAccountId = account.accountId;
+  }
   saveAccountStore(store);
 }
 
@@ -257,7 +283,11 @@ export function listAccounts(): AccountSummary[] {
 
 async function ensureFresh(account: StoredAccount): Promise<StoredAccount> {
   if (account.access && account.expires > Date.now() + REFRESH_SKEW_MS) return account;
-  return accountFromCredentials(await refreshAntigravityToken(account), account);
+  const refreshed = await refreshAntigravityToken(account);
+  return {
+    ...accountFromCredentials(refreshed, account),
+    lastUsedAt: account.lastUsedAt,
+  };
 }
 
 function apiKeyFor(account: StoredAccount): AntigravityApiKey {
@@ -279,6 +309,7 @@ export async function activateAccount(selector: string): Promise<StoredAccount> 
   account.lastUsedAt = Date.now();
   store.accounts[account.accountId] = account;
   store.activeAccountId = account.accountId;
+  store.rotate = false;
   saveAccountStore(store);
   writeActiveCredential(account);
   return account;
@@ -305,18 +336,102 @@ export async function removeAccount(selector: string): Promise<StoredAccount | u
   return next;
 }
 
-export function markAccountCooldown(tokenOrAccountId: string, durationMs = 60_000): void {
-  const store = loadAccountStore();
-  const account = Object.values(store.accounts).find(
+function findAccountByTokenOrId(
+  store: AccountsFile,
+  tokenOrAccountId: string,
+): StoredAccount | undefined {
+  return Object.values(store.accounts).find(
     (acc) =>
       acc.access === tokenOrAccountId ||
       acc.accountId === tokenOrAccountId ||
       acc.email === tokenOrAccountId,
   );
+}
+
+export function markAccountCooldown(tokenOrAccountId: string, durationMs = 60_000): void {
+  const store = loadAccountStore();
+  const account = findAccountByTokenOrId(store, tokenOrAccountId);
   if (!account) return;
   account.cooldownUntil = Date.now() + Math.max(durationMs, 5_000);
   store.accounts[account.accountId] = account;
   saveAccountStore(store);
+}
+
+export function markAccountModelUnsupported(tokenOrAccountId: string, modelId: string): void {
+  if (!modelId) return;
+  const store = loadAccountStore();
+  const account = findAccountByTokenOrId(store, tokenOrAccountId);
+  if (!account) return;
+  const family = normalizeModelFamily(modelId);
+  const unsupported = new Set(account.unsupportedModels ?? []);
+  unsupported.add(family);
+  account.unsupportedModels = [...unsupported].sort();
+  if (account.supportedModels) {
+    account.supportedModels = account.supportedModels.filter((m) => m !== family && m !== modelId);
+  }
+  store.accounts[account.accountId] = account;
+  saveAccountStore(store);
+}
+
+export function recordAccountModelCatalog(
+  tokenOrAccountId: string,
+  rawModels:
+    | Record<string, { isInternal?: unknown; disabled?: unknown; [key: string]: unknown }>
+    | undefined,
+): void {
+  if (!rawModels) return;
+  const store = loadAccountStore();
+  const account = findAccountByTokenOrId(store, tokenOrAccountId);
+  if (!account) return;
+
+  const supported = new Set<string>();
+  const disabled = new Set<string>(account.unsupportedModels ?? []);
+
+  for (const [runtimeId, info] of Object.entries(rawModels)) {
+    if (!/^(gemini-|claude-|gpt-oss-)/i.test(runtimeId) || /\s/.test(runtimeId)) continue;
+    if (/^(chat_|tab_)/i.test(runtimeId) || /image/i.test(runtimeId)) continue;
+    if (info?.isInternal) continue;
+    const family = normalizeModelFamily(runtimeId);
+    if (/-disabled$/i.test(runtimeId) || info?.disabled === true) {
+      disabled.add(family);
+    } else {
+      supported.add(family);
+    }
+  }
+
+  for (const model of supported) {
+    disabled.delete(model);
+  }
+
+  if (supported.size > 0) {
+    account.supportedModels = [...supported].sort();
+  }
+  account.unsupportedModels = disabled.size > 0 ? [...disabled].sort() : undefined;
+  store.accounts[account.accountId] = account;
+  saveAccountStore(store);
+}
+
+export async function listAccountApiKeys(): Promise<AntigravityApiKey[]> {
+  syncCurrentAuth();
+  const store = loadAccountStore();
+  const accounts = sortedAccounts(store);
+  if (accounts.length === 0) return [];
+  const keys: AntigravityApiKey[] = [];
+  let updated = false;
+  for (const candidate of accounts) {
+    try {
+      const fresh = await ensureFresh(candidate);
+      if (fresh.access !== candidate.access || fresh.expires !== candidate.expires) {
+        store.accounts[fresh.accountId] = fresh;
+        updated = true;
+      }
+      if (fresh.access) keys.push(apiKeyFor(fresh));
+    } catch {
+      // Ignore accounts whose refresh token fails during catalog discovery
+    }
+  }
+  if (updated) saveAccountStore(store);
+  return keys;
 }
 
 export function setAccountRotation(enabled: boolean): boolean {
@@ -331,38 +446,83 @@ export function isAccountRotationEnabled(): boolean {
   return store.rotate !== false;
 }
 
+function isModelExplicitlyUnsupported(account: StoredAccount, modelId: string | undefined): boolean {
+  if (!modelId || !account.unsupportedModels?.length) return false;
+  const family = normalizeModelFamily(modelId);
+  const raw = modelId.trim().toLowerCase();
+  return account.unsupportedModels.some((m) => m === family || m === raw);
+}
+
+function isAccountEligibleForModel(
+  account: StoredAccount,
+  modelId: string | undefined,
+  allAccounts: StoredAccount[],
+): boolean {
+  if (!modelId) return true;
+  if (isModelExplicitlyUnsupported(account, modelId)) return false;
+  const family = normalizeModelFamily(modelId);
+  const raw = modelId.trim().toLowerCase();
+  const anyAccountExplicitlySupports = allAccounts.some((acc) =>
+    acc.supportedModels?.some((m) => m === family || m === raw),
+  );
+  if (
+    anyAccountExplicitlySupports &&
+    Array.isArray(account.supportedModels) &&
+    account.supportedModels.length > 0 &&
+    !account.supportedModels.some((m) => m === family || m === raw)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function accountModelPriority(account: StoredAccount, modelId: string | undefined): number {
+  if (!modelId) return 0;
+  const family = normalizeModelFamily(modelId);
+  const raw = modelId.trim().toLowerCase();
+  if (account.supportedModels?.some((m) => m === family || m === raw)) return 0;
+  if (!account.supportedModels || account.supportedModels.length === 0) return 1;
+  return 2;
+}
+
 /**
  * Proactively selects the next account to use before sending a request.
  * Rotates through available accounts using least-recently-used selection
- * while skipping accounts that are currently on cooldown.
+ * while skipping accounts that are currently on cooldown or lack the requested model.
  */
-export async function acquireNextAccount(): Promise<AntigravityApiKey | undefined> {
+export async function acquireNextAccount(modelId?: string): Promise<AntigravityApiKey | undefined> {
   syncCurrentAuth();
   const store = loadAccountStore();
   const accounts = Object.values(store.accounts);
   if (accounts.length === 0) return undefined;
 
-  // If rotation is explicitly disabled, stick to the active account
+  // If rotation is explicitly disabled, stick to the active account unless it is known
+  // not to support the requested model while another linked account does.
   if (store.rotate === false) {
     const active =
       (store.activeAccountId && store.accounts[store.activeAccountId]) || accounts[0];
-    if (!active) return undefined;
-    try {
-      const fresh = await ensureFresh(active);
-      fresh.lastUsedAt = Date.now();
-      store.accounts[fresh.accountId] = fresh;
-      store.activeAccountId = fresh.accountId;
-      saveAccountStore(store);
-      writeActiveCredential(fresh);
-      return apiKeyFor(fresh);
-    } catch {
-      return undefined;
+    if (active && isAccountEligibleForModel(active, modelId, accounts)) {
+      try {
+        const fresh = await ensureFresh(active);
+        fresh.lastUsedAt = Date.now();
+        store.accounts[fresh.accountId] = fresh;
+        saveAccountStore(store);
+        return apiKeyFor(fresh);
+      } catch {
+        return undefined;
+      }
     }
   }
 
   const now = Date.now();
-  // Prioritize non-cooldown accounts, then least-recently-used
-  const candidates = [...accounts].sort((a, b) => {
+  const eligible = accounts.filter((acc) => isAccountEligibleForModel(acc, modelId, accounts));
+  const pool = eligible.length > 0 ? eligible : accounts;
+
+  // Prioritize model support, then non-cooldown accounts, then least-recently-used
+  const candidates = [...pool].sort((a, b) => {
+    const aPrio = accountModelPriority(a, modelId);
+    const bPrio = accountModelPriority(b, modelId);
+    if (aPrio !== bPrio) return aPrio - bPrio;
     const aCool = (a.cooldownUntil ?? 0) > now;
     const bCool = (b.cooldownUntil ?? 0) > now;
     if (aCool !== bCool) return aCool ? 1 : -1;
@@ -375,9 +535,7 @@ export async function acquireNextAccount(): Promise<AntigravityApiKey | undefine
       if (!fresh.access) continue;
       fresh.lastUsedAt = Date.now();
       store.accounts[fresh.accountId] = fresh;
-      store.activeAccountId = fresh.accountId;
       saveAccountStore(store);
-      writeActiveCredential(fresh);
       return apiKeyFor(fresh);
     } catch {
       // Skip account if token refresh fails
@@ -388,23 +546,32 @@ export async function acquireNextAccount(): Promise<AntigravityApiKey | undefine
 
 /**
  * Switch to the next stored account that has not already been tried in this request.
- * Used when Antigravity returns a hard quota wall (HTTP 429).
+ * Used when Antigravity returns a hard quota wall (HTTP 429) or model unavailable (HTTP 404).
  */
 export async function failoverToNextAccount(
   triedAccessTokens: ReadonlySet<string>,
+  modelId?: string,
 ): Promise<AntigravityApiKey | undefined> {
   syncCurrentAuth();
   const store = loadAccountStore();
   const now = Date.now();
-  // Candidates not already tried in this request, prioritizing non-cooldown accounts, then least-recently-used
-  const candidates = Object.values(store.accounts)
-    .filter((account) => !triedAccessTokens.has(account.access))
-    .sort((a, b) => {
-      const aCool = (a.cooldownUntil ?? 0) > now;
-      const bCool = (b.cooldownUntil ?? 0) > now;
-      if (aCool !== bCool) return aCool ? 1 : -1;
-      return (a.lastUsedAt || 0) - (b.lastUsedAt || 0);
-    });
+  const allAccounts = Object.values(store.accounts);
+  const untried = allAccounts.filter(
+    (account) =>
+      !triedAccessTokens.has(account.access) && !isModelExplicitlyUnsupported(account, modelId),
+  );
+  const eligible = untried.filter((acc) => isAccountEligibleForModel(acc, modelId, allAccounts));
+  const pool = eligible.length > 0 ? eligible : untried;
+
+  const candidates = [...pool].sort((a, b) => {
+    const aPrio = accountModelPriority(a, modelId);
+    const bPrio = accountModelPriority(b, modelId);
+    if (aPrio !== bPrio) return aPrio - bPrio;
+    const aCool = (a.cooldownUntil ?? 0) > now;
+    const bCool = (b.cooldownUntil ?? 0) > now;
+    if (aCool !== bCool) return aCool ? 1 : -1;
+    return (a.lastUsedAt || 0) - (b.lastUsedAt || 0);
+  });
 
   for (const candidate of candidates) {
     try {
@@ -412,9 +579,7 @@ export async function failoverToNextAccount(
       if (!account.access || triedAccessTokens.has(account.access)) continue;
       account.lastUsedAt = Date.now();
       store.accounts[account.accountId] = account;
-      store.activeAccountId = account.accountId;
       saveAccountStore(store);
-      writeActiveCredential(account);
       return apiKeyFor(account);
     } catch {
       // Skip accounts whose refresh token is no longer valid.

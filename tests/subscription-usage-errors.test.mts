@@ -35,6 +35,27 @@ for (const cfg of [codexCfg, antigravityCfg, opencodeCfg, deepseekCfg]) {
 	});
 }
 
+test("antigravity resolves each account's paid tier instead of assuming Pro", async (t) => {
+	isolateEnv(t);
+	t.mock.method(fs, "existsSync", () => true);
+	t.mock.method(fs, "readFileSync", () => JSON.stringify({
+		activeAccountId: "ultra",
+		accounts: {
+			ultra: { accountId: "ultra", email: "ultra@example.com", access: "ultra-token" },
+			pro: { accountId: "pro", email: "pro@example.com", access: "pro-token" },
+		},
+	}));
+	t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => new Response(JSON.stringify(
+		String(url).endsWith(":loadCodeAssist")
+			? { paidTier: { name: (init?.headers as Record<string, string>).Authorization === "Bearer ultra-token" ? "Google AI Ultra" : "Google AI Pro" }, currentTier: { name: "Antigravity" } }
+			: { groups: [{ buckets: [{ bucketId: "3p-weekly", remainingFraction: 0.36 }] }] },
+	)));
+	const result = await antigravityCfg.fetchUsage();
+	assert.equal(result.plan, "Ultra");
+	assert.deepEqual(result.accounts?.map((a) => a.plan), ["Ultra", "Pro"]);
+	assert.equal(result.windows["3p-weekly"], 64);
+});
+
 test("non-JSON errors retain HTTP status without dumping HTML", async (t) => {
 	isolateEnv(t);
 	t.mock.method(fs, "readFileSync", () => JSON.stringify({ "openai-codex": { type: "oauth", access: "test" } }));

@@ -32,6 +32,17 @@ export const ANTIGRAVITY_ROUTING: Record<string, AntigravityRouting> = {
     },
     defaultRequestId: "claude-opus-4-6-thinking",
   },
+  "claude-opus-5-5": {
+    off: "claude-opus-5-5-low",
+    routing: {
+      minimal: "claude-opus-5-5-low",
+      low: "claude-opus-5-5-low",
+      medium: "claude-opus-5-5-medium",
+      high: "claude-opus-5-5-high",
+      xhigh: "claude-opus-5-5-high",
+    },
+    defaultRequestId: "claude-opus-5-5-low",
+  },
   // Live fetchAvailableModels exposes `claude-sonnet-4-6` (display: Thinking), not a separate *-thinking id.
   "claude-sonnet-4-6": {
     off: "claude-sonnet-4-6",
@@ -43,6 +54,17 @@ export const ANTIGRAVITY_ROUTING: Record<string, AntigravityRouting> = {
       xhigh: "claude-sonnet-4-6",
     },
     defaultRequestId: "claude-sonnet-4-6",
+  },
+  "claude-sonnet-5-5": {
+    off: "claude-sonnet-5-5-low",
+    routing: {
+      minimal: "claude-sonnet-5-5-low",
+      low: "claude-sonnet-5-5-low",
+      medium: "claude-sonnet-5-5-medium",
+      high: "claude-sonnet-5-5-high",
+      xhigh: "claude-sonnet-5-5-high",
+    },
+    defaultRequestId: "claude-sonnet-5-5-low",
   },
   "gemini-3.1-pro": {
     // `gemini-3.1-pro-high` is advertised but currently 400s for agent streamGenerateContent;
@@ -56,6 +78,17 @@ export const ANTIGRAVITY_ROUTING: Record<string, AntigravityRouting> = {
       xhigh: "gemini-pro-agent",
     },
     defaultRequestId: "gemini-3.1-pro-low",
+  },
+  "gemini-4-argon": {
+    off: "gemini-4-argon-low",
+    routing: {
+      minimal: "gemini-4-argon-low",
+      low: "gemini-4-argon-low",
+      medium: "gemini-4-argon-medium",
+      high: "gemini-4-argon-high",
+      xhigh: "gemini-4-argon-high",
+    },
+    defaultRequestId: "gemini-4-argon-low",
   },
   "gemini-3.8-flash": {
     off: "gemini-3.8-flash-low",
@@ -120,6 +153,10 @@ export const ANTIGRAVITY_ROUTING: Record<string, AntigravityRouting> = {
  */
 export const RUNTIME_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "gemini-3.8-flash": 65536,
+  "gemini-4-argon": 65536,
+  "gemini-4-argon-low": 65536,
+  "gemini-4-argon-medium": 65536,
+  "gemini-4-argon-high": 65536,
   "gemini-3.8-flash-low": 65536,
   "gemini-3.8-flash-medium": 65536,
   "gemini-3.8-flash-high": 65536,
@@ -143,7 +180,15 @@ export const RUNTIME_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "gemini-pro-agent": 65535,
   "claude-opus-4-6": 64000,
   "claude-opus-4-6-thinking": 64000,
+  "claude-opus-5-5": 64000,
+  "claude-opus-5-5-low": 64000,
+  "claude-opus-5-5-medium": 64000,
+  "claude-opus-5-5-high": 64000,
   "claude-sonnet-4-6": 64000,
+  "claude-sonnet-5-5": 64000,
+  "claude-sonnet-5-5-low": 64000,
+  "claude-sonnet-5-5-medium": 64000,
+  "claude-sonnet-5-5-high": 64000,
   "gpt-oss-120b": 32768,
   "gpt-oss-120b-medium": 32768,
 };
@@ -215,6 +260,16 @@ const thinkingLevelMaps = {
 /** Same set as `agy models`, collapsed to public Pi model IDs. */
 export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
   {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon (Antigravity)",
+    reasoning: true,
+    thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
+    input: ["text", "image"],
+    cost: { input: 2.0, output: 10.0, cacheRead: 0.1, cacheWrite: 2.0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  },
+  {
     id: "gemini-3.8-flash",
     name: "Gemini 3.8 Flash (Antigravity)",
     reasoning: true,
@@ -255,10 +310,30 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     maxTokens: 64000,
   },
   {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5 (Antigravity)",
+    reasoning: true,
+    thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
+    input: ["text", "image"],
+    cost: claudeOpusCost,
+    contextWindow: 250000,
+    maxTokens: 64000,
+  },
+  {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Antigravity)",
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.thinking,
+    input: ["text", "image"],
+    cost: claudeSonnetCost,
+    contextWindow: 200000,
+    maxTokens: 64000,
+  },
+  {
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5 (Antigravity)",
+    reasoning: true,
+    thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
     input: ["text", "image"],
     cost: claudeSonnetCost,
     contextWindow: 200000,
@@ -370,6 +445,11 @@ export function getFallbackRuntimeModel(runtimeModel: string, effort?: string): 
 export type { ThinkingWire };
 
 export const ANTIGRAVITY_MODEL_ENUM: Record<string, string> = {
+  // Gemini 4 Argon
+  "gemini-4-argon": "MODEL_PLACEHOLDER_M417",
+  "gemini-4-argon-high": "MODEL_PLACEHOLDER_M417",
+  "gemini-4-argon-medium": "MODEL_PLACEHOLDER_M418",
+  "gemini-4-argon-low": "MODEL_PLACEHOLDER_M419",
   // Gemini 3.8 Flash
   "gemini-3.8-flash": "MODEL_PLACEHOLDER_M318",
   "gemini-3.8-flash-high": "MODEL_PLACEHOLDER_M318",
@@ -398,7 +478,16 @@ export const ANTIGRAVITY_MODEL_ENUM: Record<string, string> = {
   "gemini-3.1-pro-low": "MODEL_PLACEHOLDER_M36",
   "gemini-3.1-pro-high": "MODEL_PLACEHOLDER_M37",
   "gemini-pro-agent": "MODEL_PLACEHOLDER_M16",
-  // Claude
+  // Claude 5.5
+  "claude-opus-5-5": "MODEL_PLACEHOLDER_M400",
+  "claude-opus-5-5-low": "MODEL_PLACEHOLDER_M400",
+  "claude-opus-5-5-medium": "MODEL_PLACEHOLDER_M401",
+  "claude-opus-5-5-high": "MODEL_PLACEHOLDER_M402",
+  "claude-sonnet-5-5": "MODEL_PLACEHOLDER_M403",
+  "claude-sonnet-5-5-low": "MODEL_PLACEHOLDER_M403",
+  "claude-sonnet-5-5-medium": "MODEL_PLACEHOLDER_M404",
+  "claude-sonnet-5-5-high": "MODEL_PLACEHOLDER_M405",
+  // Claude 4.6
   "claude-sonnet-4-6": "MODEL_PLACEHOLDER_M35",
   "claude-opus-4-6": "MODEL_PLACEHOLDER_M26",
   "claude-opus-4-6-thinking": "MODEL_PLACEHOLDER_M26",
@@ -411,17 +500,18 @@ const modelEnumCache = new Map<string, string>();
 
 /** Register dynamically discovered model enum (e.g. from fetchAvailableModels). */
 export function registerModelEnum(wireModelId: string, modelEnum: string): void {
-  if (wireModelId && modelEnum) {
+  if (wireModelId && modelEnum && !/-disabled$/i.test(wireModelId)) {
     modelEnumCache.set(wireModelId, modelEnum);
   }
 }
 
 /** Register batch of discovered model enums from fetchAvailableModels raw models dictionary. */
 export function registerDiscoveredModelEnums(
-  models: Record<string, { model?: unknown }> | undefined,
+  models: Record<string, { model?: unknown; disabled?: unknown }> | undefined,
 ): void {
   if (!models) return;
   for (const [wireId, info] of Object.entries(models)) {
+    if (/-disabled$/i.test(wireId) || info?.disabled === true) continue;
     if (typeof info?.model === "string" && info.model) {
       modelEnumCache.set(wireId, info.model);
     }

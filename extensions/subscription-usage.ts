@@ -1161,7 +1161,7 @@ interface CachedAntigravityToken {
 	refreshToken: string;
 }
 let cachedAntigravityToken: CachedAntigravityToken | undefined;
-let cachedAntigravityTier: { plan: string | undefined; cachedAt: number } | undefined;
+const cachedAntigravityTiers = new Map<string, { plan: string; cachedAt: number }>();
 const TIER_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 async function refreshAntigravityToken(
@@ -1252,6 +1252,35 @@ export const antigravityCfg: ProviderCfg = {
 				: new Error("all Antigravity quota endpoints failed");
 		}
 
+		async function queryPlan(token: string, endpoint: string): Promise<string | undefined> {
+			const cached = cachedAntigravityTiers.get(token);
+			if (cached && Date.now() - cached.cachedAt < TIER_CACHE_TTL_MS) return cached.plan;
+			try {
+				const response = await fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+					method: "POST",
+					headers: { ...baseHeaders, Authorization: `Bearer ${token}` },
+					body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" } }),
+					signal: anySignal(signal, AbortSignal.timeout(10_000)),
+				});
+				if (!response.ok) {
+					await response.body?.cancel().catch(() => undefined);
+					return undefined;
+				}
+				const data = await response.json() as { paidTier?: { name?: string }; currentTier?: { name?: string } };
+				const name = data.paidTier?.name || data.currentTier?.name;
+				const plan = name === "Antigravity" ? "Free" : name?.replace(/^Google AI\s*/i, "");
+				if (plan) {
+					for (const [key, entry] of cachedAntigravityTiers) {
+						if (Date.now() - entry.cachedAt >= TIER_CACHE_TTL_MS) cachedAntigravityTiers.delete(key);
+					}
+					cachedAntigravityTiers.set(token, { plan, cachedAt: Date.now() });
+				}
+				return plan;
+			} catch {
+				return undefined; // Tier lookup must not hide valid quota data.
+			}
+		}
+
 		function parseQuotaBuckets(quotaJson: unknown): { windows: Record<string, number>; resets: Record<string, number> } {
 			const record = asRecord(quotaJson);
 			const groups = Array.isArray(record?.groups) ? (record.groups as Array<Record<string, unknown>>) : [];
@@ -1313,7 +1342,7 @@ export const antigravityCfg: ProviderCfg = {
 								id: acc.email || acc.accountId || key,
 								active: isAct,
 								cooldown: isCool,
-								plan: "Pro",
+								plan: await queryPlan(tok, qRes.endpoint),
 								windows: accWindows,
 								resets: accResets,
 							};
@@ -1383,44 +1412,7 @@ export const antigravityCfg: ProviderCfg = {
 
 		if (Object.keys(windows).length === 0) throw new Error("no usage data");
 
-		let plan =
-			cachedAntigravityTier && Date.now() - cachedAntigravityTier.cachedAt < TIER_CACHE_TTL_MS
-				? cachedAntigravityTier.plan
-				: undefined;
-		if (plan === undefined) {
-			try {
-				const resAssist = await fetch(`${baseUrl}/v1internal:loadCodeAssist`, {
-					method: "POST",
-					headers: { ...baseHeaders, Authorization: `Bearer ${access}` },
-					body: JSON.stringify({
-						metadata: {
-							ideType: "ANTIGRAVITY",
-							platform: "PLATFORM_UNSPECIFIED",
-							pluginType: "GEMINI",
-						},
-					}),
-					signal: anySignal(signal, AbortSignal.timeout(10_000)),
-				});
-				if (resAssist.ok) {
-					const assistJson = (await resAssist.json()) as {
-						paidTier?: { id?: string; name?: string };
-						currentTier?: { id?: string; name?: string };
-					};
-					const paid = assistJson.paidTier?.name;
-					const current = assistJson.currentTier?.name;
-					if (paid) {
-						plan = paid.replace(/^Google AI\s*/i, "");
-					} else if (current) {
-						plan = current === "Antigravity" ? "Free" : current;
-					}
-					cachedAntigravityTier = { plan, cachedAt: Date.now() };
-				} else {
-					await resAssist.body?.cancel().catch(() => undefined);
-				}
-			} catch {
-				// ignore tier lookup failure
-			}
-		}
+		const plan = await queryPlan(access, baseUrl);
 
 		return { windows, plan, resets };
 	},

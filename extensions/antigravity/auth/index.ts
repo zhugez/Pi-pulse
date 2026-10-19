@@ -14,11 +14,16 @@ export {
 export type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth.js";
 export {
   activateAccount,
+  agentDir,
   acquireNextAccount,
   failoverToNextAccount,
   isAccountRotationEnabled,
+  listAccountApiKeys,
   listAccounts,
   markAccountCooldown,
+  markAccountModelUnsupported,
+  normalizeModelFamily,
+  recordAccountModelCatalog,
   rememberAccount,
   removeAccount,
   setAccountRotation,

@@ -16,6 +16,7 @@ import {
   acquireNextAccount,
   failoverToNextAccount,
   markAccountCooldown,
+  markAccountModelUnsupported,
 } from "../auth/accounts.js";
 import {
   antigravityHeaders,
@@ -1500,7 +1501,7 @@ export function streamAntigravity(
     try {
       let creds = parseApiKey(opts.apiKey);
       try {
-        const rotated = await acquireNextAccount();
+        const rotated = await acquireNextAccount(model.id);
         if (rotated) creds = rotated;
       } catch {
         // Fall back to caller's provided apiKey on error
@@ -1559,17 +1560,24 @@ export function streamAntigravity(
 
           for (const endpoint of endpointCandidates()) {
             setLastEndpoint(endpoint);
-            response = await fetchWithHeaderDeadline(
-              `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
-              {
-                method: "POST",
-                headers: requestHeaders,
-                body,
-              },
-              opts.signal,
-              streamHeaderTimeoutMs(),
-              streamStallTimeoutMs(),
-            );
+            try {
+              response = await fetchWithHeaderDeadline(
+                `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
+                {
+                  method: "POST",
+                  headers: requestHeaders,
+                  body,
+                },
+                opts.signal,
+                streamHeaderTimeoutMs(),
+                streamStallTimeoutMs(),
+              );
+            } catch (fetchErr) {
+              if (opts.signal?.aborted) throw fetchErr;
+              lastText = safeError(fetchErr);
+              setLastError(lastText);
+              continue;
+            }
             setLastStatus(response.status);
             if (response.ok) break;
             lastText = await response.text();
@@ -1582,7 +1590,11 @@ export function streamAntigravity(
             ) {
               break;
             }
-            if (![403, 404, 429, 500, 502, 503, 504].includes(response.status)) break;
+            // Do not fall back to sandbox/prod endpoints on 404: daily-cloudcode-pa
+            // is the canonical catalog host, while cloudcode-pa returns a spurious 429
+            // for daily-only models (such as gemini-4-argon-*), masking the real 404.
+            if (response.status === 404) break;
+            if (![403, 429, 500, 502, 503, 504].includes(response.status)) break;
           }
 
           if (response?.ok) break;
@@ -1641,6 +1653,24 @@ export function streamAntigravity(
             }
           }
           const friendly = friendlyAntigravityError(response?.status, lastText);
+          if (response?.status === 404) {
+            markAccountModelUnsupported(creds.token, model.id);
+            const next = await failoverToNextAccount(triedAccessTokens, model.id);
+            if (next) {
+              triedAccessTokens.add(next.token);
+              creds = next;
+              requestHeaders = antigravityHeaders(creds.token);
+              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+              projectId = resolveProjectId({
+                token: creds.token,
+                warmedProject: switchedProject,
+                credentialProjectId: creds.projectId,
+              });
+              setLastProjectId(projectId);
+              emptyAttempt = -1;
+              continue;
+            }
+          }
           const isQuota =
             response?.status === 429 ||
             (response?.status === 403 &&
@@ -1648,7 +1678,7 @@ export function streamAntigravity(
           if (isQuota) {
             const waitSeconds = parseResetSeconds(lastText);
             markAccountCooldown(creds.token, waitSeconds * 1000);
-            const next = await failoverToNextAccount(triedAccessTokens);
+            const next = await failoverToNextAccount(triedAccessTokens, model.id);
             if (next) {
               triedAccessTokens.add(next.token);
               creds = next;
@@ -1690,7 +1720,7 @@ export function streamAntigravity(
           if (isStreamQuota && output.content.length === 0) {
             const waitSeconds = parseResetSeconds(errText);
             markAccountCooldown(creds.token, waitSeconds * 1000);
-            const next = await failoverToNextAccount(triedAccessTokens);
+            const next = await failoverToNextAccount(triedAccessTokens, model.id);
             if (next) {
               triedAccessTokens.add(next.token);
               creds = next;

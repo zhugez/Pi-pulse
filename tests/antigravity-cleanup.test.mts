@@ -152,3 +152,102 @@ test("Antigravity account rotation and cooldown lifecycle", async () => {
     rmSync(tempAgentDir, { recursive: true, force: true });
   }
 });
+
+test("Model-aware account rotation routes gemini-4-argon to Ultra account and filters gemini-4-argon-disabled", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const {
+    acquireNextAccount,
+    failoverToNextAccount,
+    recordAccountModelCatalog,
+    setAccountRotation,
+  } = await import("../extensions/antigravity/auth/accounts.ts");
+
+  const tempAgentDir = mkdtempSync(join(tmpdir(), "pi-pulse-ag-argon-"));
+  const prevEnv = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = tempAgentDir;
+
+  try {
+    const initialAccounts = {
+      version: 1,
+      activeAccountId: "pro1@gmail.com",
+      rotate: true,
+      accounts: {
+        "pro1@gmail.com": {
+          accountId: "pro1@gmail.com",
+          email: "pro1@gmail.com",
+          access: "tok_pro1",
+          refresh: "ref_pro1",
+          expires: Date.now() + 3600_000,
+          addedAt: 1000,
+          lastUsedAt: 100,
+        },
+        "ultra@gmail.com": {
+          accountId: "ultra@gmail.com",
+          email: "ultra@gmail.com",
+          access: "tok_ultra",
+          refresh: "ref_ultra",
+          expires: Date.now() + 3600_000,
+          addedAt: 2000,
+          lastUsedAt: 9000,
+        },
+      },
+    };
+    writeFileSync(
+      join(tempAgentDir, "antigravity-accounts.json"),
+      JSON.stringify(initialAccounts, null, 2),
+    );
+    writeFileSync(
+      join(tempAgentDir, "auth.json"),
+      JSON.stringify(
+        {
+          antigravity: {
+            type: "oauth",
+            email: "ultra@gmail.com",
+            access: "tok_ultra",
+            refresh: "ref_ultra",
+            expires: Date.now() + 3600_000,
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    recordAccountModelCatalog("tok_pro1", {
+      "gemini-3.8-flash-high": { model: "MODEL_PLACEHOLDER_M318" },
+      "gemini-4-argon-disabled": { model: "MODEL_PLACEHOLDER_M421", disabled: true },
+    });
+    recordAccountModelCatalog("tok_ultra", {
+      "gemini-3.8-flash-high": { model: "MODEL_PLACEHOLDER_M318" },
+      "gemini-4-argon-high": { model: "MODEL_PLACEHOLDER_M417" },
+      "gemini-4-argon-medium": { model: "MODEL_PLACEHOLDER_M418" },
+      "gemini-4-argon-low": { model: "MODEL_PLACEHOLDER_M419" },
+    });
+
+    // Even though pro1 has an older lastUsedAt (100 vs 9000), gemini-4-argon must pick ultra
+    const argonAcc = await acquireNextAccount("gemini-4-argon");
+    assert.equal(argonAcc?.token, "tok_ultra");
+
+    // Shared model (gemini-3.8-flash) rotates to the least-recently-used pro1 account
+    const flashAcc = await acquireNextAccount("gemini-3.8-flash");
+    assert.equal(flashAcc?.token, "tok_pro1");
+
+    // Even when rotation is off and pro1 is active, requesting gemini-4-argon routes to ultra
+    setAccountRotation(false);
+    const argonWhenPinned = await acquireNextAccount("gemini-4-argon");
+    assert.equal(argonWhenPinned?.token, "tok_ultra");
+
+    // Failover for gemini-4-argon from pro1 skips unsupported accounts and lands on ultra
+    const failoverArgon = await failoverToNextAccount(new Set(["tok_pro1"]), "gemini-4-argon");
+    assert.equal(failoverArgon?.token, "tok_ultra");
+  } finally {
+    if (prevEnv !== undefined) {
+      process.env.PI_CODING_AGENT_DIR = prevEnv;
+    } else {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+    rmSync(tempAgentDir, { recursive: true, force: true });
+  }
+});

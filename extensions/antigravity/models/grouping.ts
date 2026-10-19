@@ -63,6 +63,7 @@ export function isSelectableRuntimeModelId(id: string): boolean {
   }
   if (/^(chat_|tab_)/i.test(id)) return false;
   if (/image/i.test(id)) return false;
+  if (/-disabled$/i.test(id)) return false;
   return true;
 }
 
@@ -82,7 +83,7 @@ export function buildAntigravityCatalog(
 
   for (const [runtimeId, info] of Object.entries(rawModels)) {
     if (!isSelectableRuntimeModelId(runtimeId)) continue;
-    if (info?.isInternal) continue;
+    if (info?.isInternal || info?.disabled === true) continue;
 
     const displayName = modelDisplayName(info);
     if (runtimeId.endsWith("-tiered")) {
