@@ -359,19 +359,6 @@ export function killAllProcesses(): void {
 }
 
 /**
- * Force-kill the subprocess after a 500ms grace period.
- * The Claude CLI hangs after emitting the result message (known bug).
- * Brief grace period allows final stdout flushing before force-kill.
- *
- * @param proc - The Claude subprocess to clean up
- */
-export function cleanupProcess(proc: ChildProcess): void {
-  setTimeout(() => {
-    forceKillProcess(proc);
-  }, 500);
-}
-
-/**
  * Attach a data listener to stderr and accumulate output into a buffer.
  *
  * @param proc - The Claude subprocess

@@ -13,38 +13,38 @@ import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import {
   activateAccount,
   agentDir,
-  getApiKey,
   isAccountRotationEnabled,
   listAccounts,
-  loginAntigravity,
   rememberAccount,
-  refreshAntigravityToken,
   removeAccount,
   setAccountRotation,
   updateRememberedAccount,
-} from "./auth/index.js";
-import { DEFAULT_ENDPOINT } from "./client/index.js";
-import { getLastDiagnostics, runWithDiagnostics } from "./diagnostics/index.js";
-import { generateAntigravityImage, parseImageCommandArgs } from "./image/index.js";
-import { executeAntigravitySearch, parseSearchCommandArgs } from "./search/index.js";
+} from "./auth/accounts.js";
+import { getApiKey, loginAntigravity, refreshAntigravityToken } from "./auth/oauth.js";
+import { DEFAULT_ENDPOINT } from "./client/client.js";
+import { getLastDiagnostics, runWithDiagnostics } from "./diagnostics/diagnostics.js";
+import { generateAntigravityImage, parseImageCommandArgs } from "./image/image.js";
+import { executeAntigravitySearch, parseSearchCommandArgs } from "./search/search.js";
 import {
   applyAntigravityCatalog,
-  discoverAntigravityModels,
   getCurrentAntigravityCatalog,
-  hydrateAntigravityCatalog,
   PROVIDER_ID,
   PROVIDER_NAME,
+} from "./models/models.js";
+import { resolvedCatalog } from "./models/grouping.js";
+import {
+  discoverAntigravityModels,
+  hydrateAntigravityCatalog,
   refreshAntigravityModels,
-  resolvedCatalog,
-} from "./models/index.js";
-import { ANTIGRAVITY_API, streamAntigravity } from "./stream/index.js";
+} from "./models/discovery.js";
+import { ANTIGRAVITY_API, streamAntigravity } from "./stream/stream.js";
 import {
   fetchAccountUsage,
   formatModelsList,
   formatUsageSummary,
   resolveApiKeyFromContext,
-} from "./usage/index.js";
-import { redactSecrets, maskEmail } from "./utils/index.js";
+} from "./usage/usage.js";
+import { redactSecrets, maskEmail } from "./utils/security.js";
 
 /**
  * Pi's interactive `notify` writes into the chat transcript. `console.log` in that

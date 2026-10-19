@@ -42,7 +42,6 @@ export type AntigravityRouting = {
 
 // Stream & API Types
 export const ANTIGRAVITY_API = "antigravity-api" as const;
-export type AntigravityApi = typeof ANTIGRAVITY_API;
 
 export type AntigravityStreamOptions = Omit<SimpleStreamOptions, "toolChoice"> & {
   toolChoice?: ToolChoice;

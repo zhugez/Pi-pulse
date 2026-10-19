@@ -366,8 +366,3 @@ export function stopHandoffBroker(): void {
     }
   }
 }
-
-/** Test seam. */
-export function resetHandoffBrokerForTests(): void {
-  stopHandoffBroker();
-}

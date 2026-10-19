@@ -5,8 +5,9 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
-import { executeAntigravitySearch } from "../search/index.js";
-import { isExtraToolEnabled, redactSecrets } from "../utils/index.js";
+import { executeAntigravitySearch } from "../search/search.js";
+import { isExtraToolEnabled } from "../utils/util.js";
+import { redactSecrets } from "../utils/security.js";
 
 export default function (pi: ExtensionAPI): void {
   if (!isExtraToolEnabled("SEARCH")) return;

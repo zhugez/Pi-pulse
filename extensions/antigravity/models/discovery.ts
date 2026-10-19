@@ -6,12 +6,9 @@ import type {
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import {
-  getApiKey,
-  listAccountApiKeys,
-  recordAccountModelCatalog,
-} from "../auth/index.js";
-import { DEFAULT_ENDPOINT, fetchAvailableModelsCatalog, parseApiKey } from "../client/index.js";
+import { getApiKey } from "../auth/oauth.js";
+import { listAccountApiKeys, recordAccountModelCatalog } from "../auth/accounts.js";
+import { DEFAULT_ENDPOINT, fetchAvailableModelsCatalog, parseApiKey } from "../client/client.js";
 import { ANTIGRAVITY_API, type ModelInfoRaw } from "../types/types.js";
 import { antigravityEnv, isRecord } from "../utils/util.js";
 import { buildAntigravityCatalog, resolvedCatalog, type AntigravityCatalog } from "./grouping.js";

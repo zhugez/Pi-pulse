@@ -9,8 +9,8 @@ import {
   DEFAULT_IMAGE_MODEL,
   generateAntigravityImage,
   IMAGE_ASPECT_RATIOS,
-} from "../image/index.js";
-import { isExtraToolEnabled } from "../utils/index.js";
+} from "../image/image.js";
+import { isExtraToolEnabled } from "../utils/util.js";
 
 export default function (pi: ExtensionAPI): void {
   if (!isExtraToolEnabled("IMAGE")) return;

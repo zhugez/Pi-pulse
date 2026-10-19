@@ -600,21 +600,6 @@ export function takeParkedCliProcess(
   return cli;
 }
 
-export function parkedCliProcessCount(): number {
-  return parked.size;
-}
-
-/** Test seam: drop and force-kill every parked process synchronously. */
-export function resetCliProcessesForTests(): void {
-  for (const cli of parked.values()) {
-    cli.clearIdleTimer();
-    (cli as any).retired = true;
-    unregisterHandoffTarget(cli.cliSessionId, cli);
-    if (cli.alive) forceKillProcess(cli.proc);
-  }
-  parked.clear();
-}
-
 /** Retire every parked process (extension teardown, tests). */
 export async function retireAllCliProcesses(): Promise<void> {
   const all = [...parked.values()];

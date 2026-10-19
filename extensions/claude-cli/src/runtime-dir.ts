@@ -55,8 +55,3 @@ export function cleanupRuntimeDir(): void {
     /* already gone, or not ours to remove */
   }
 }
-
-/** Test seam: forget the current directory without removing it. */
-export function resetRuntimeDirForTests(): void {
-  dir = undefined;
-}

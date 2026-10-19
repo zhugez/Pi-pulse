@@ -46,6 +46,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
+import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./antigravity/auth/oauth.ts";
+import { ENDPOINT_FALLBACKS } from "./antigravity/client/client.ts";
 import {
 	asRecord,
 	finiteNumber,
@@ -1122,21 +1124,6 @@ export function createCodexLbCfg(id: string): ProviderCfg {
 	};
 }
 
-const ANTIGRAVITY_CLIENT_ID = Buffer.from(
-	"MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlc" +
-		"C5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
-	"base64",
-).toString("utf8");
-const ANTIGRAVITY_CLIENT_SECRET = Buffer.from(
-	"R09DU1BYLUs1OEZXUjQ" + "4NkxkTEoxbUxCOHNYQzR6NnFEQWY=",
-	"base64",
-).toString("utf8");
-
-const ANTIGRAVITY_ENDPOINTS = [
-	"https://daily-cloudcode-pa.googleapis.com",
-	"https://daily-cloudcode-pa.sandbox.googleapis.com",
-	"https://cloudcode-pa.googleapis.com",
-] as const;
 const RETRYABLE_ANTIGRAVITY_STATUSES = new Set([
 	403,
 	404,
@@ -1152,7 +1139,7 @@ export function antigravityEndpointCandidates(
 	env: NodeJS.ProcessEnv = process.env,
 ): string[] {
 	const explicit = env.ANTIGRAVITY_BASE_URL?.trim();
-	return explicit ? [explicit] : [...ANTIGRAVITY_ENDPOINTS];
+	return explicit ? [explicit] : [...ENDPOINT_FALLBACKS];
 }
 
 interface CachedAntigravityToken {
@@ -1175,13 +1162,12 @@ async function refreshAntigravityToken(
 	) {
 		return cachedAntigravityToken.token;
 	}
-	const res = await undiciFetch("https://oauth2.googleapis.com/token", {
+	const res = await undiciFetch(TOKEN_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
-			client_id: process.env.ANTIGRAVITY_CLIENT_ID || ANTIGRAVITY_CLIENT_ID,
-			client_secret:
-				process.env.ANTIGRAVITY_CLIENT_SECRET || ANTIGRAVITY_CLIENT_SECRET,
+			client_id: CLIENT_ID,
+			client_secret: CLIENT_SECRET,
 			refresh_token: refreshToken,
 			grant_type: "refresh_token",
 		}).toString(),

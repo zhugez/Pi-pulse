@@ -5,9 +5,7 @@
  * and generates MCP config files that point to the schema-only MCP server.
  *
  * The schema file is refreshed whenever pi's tool surface changes. pi packages
- * register and unregister tools at runtime — pi-mcp-adapter re-registers its
- * `mcp` gateway with a new description every time an MCP server is added,
- * enabled or disabled — so a snapshot taken at the first turn goes stale for
+ * register and unregister tools at runtime, so a snapshot taken at the first turn goes stale for
  * the rest of the session. The schema file keeps a stable per-process path,
  * so refreshing rewrites in place instead of accumulating files; every
  * rewrite bumps `version` so a parked CLI process spawned against the old
@@ -46,13 +44,6 @@ export interface McpToolDef {
   inputSchema: Record<string, unknown>;
 }
 
-/** Outcome of a write: where the config lives, and whether anything changed. */
-export interface McpConfigWrite {
-  configPath: string;
-  /** False when the tool surface was byte-identical to the last write. */
-  changed: boolean;
-}
-
 /** The staged schema file and how many times it has been rewritten. */
 export interface SchemaFileWrite {
   schemaPath: string;
@@ -64,8 +55,6 @@ export interface SchemaFileWrite {
 /** Serialized tool defs as of the last write, for change detection. */
 let lastSchemaJson: string | undefined;
 let schemaVersion = 0;
-/** The legacy per-process config file's content never varies: written once. */
-let configWritten = false;
 /** Per-session config files this process wrote, for exit cleanup. */
 const sessionConfigPaths = new Map<string, string>();
 
@@ -97,10 +86,6 @@ function schemaFilePath(): string {
 }
 
 /** Where this process stages the legacy (session-less) `--mcp-config` file. */
-function configFilePath(): string {
-  return runtimeFile("mcp-config.json");
-}
-
 function sessionConfigFilePath(cliSessionId: string): string {
   // The session id reaches us from the CLI. Keep it out of the path so a
   // hostile value cannot traverse out of the runtime directory.
@@ -131,35 +116,6 @@ export function writeSchemaFile(toolDefs: McpToolDef[]): SchemaFileWrite {
     schemaVersion++;
   }
   return { schemaPath: schemaFilePath(), changed, version: schemaVersion };
-}
-
-/**
- * Write MCP config and tool schemas to temp files (session-less form: no
- * handoff proxy, the server answers `tools/call` with an error).
- *
- * @param toolDefs - Array of custom tool definitions
- * @returns The config file path, and whether this call rewrote the schemas
- */
-export function writeMcpConfig(toolDefs: McpToolDef[]): McpConfigWrite {
-  const configPath = configFilePath();
-  const { schemaPath, changed } = writeSchemaFile(toolDefs);
-
-  if (!configWritten) {
-    const config = {
-      mcpServers: {
-        "custom-tools": {
-          command: "node",
-          args: [serverPath(), schemaPath],
-        },
-      },
-    };
-    writeFileSync(configPath, JSON.stringify(config), {
-      mode: RUNTIME_FILE_MODE,
-    });
-    configWritten = true;
-  }
-
-  return { configPath, changed };
 }
 
 /**
@@ -215,7 +171,6 @@ export function removeSessionMcpConfig(cliSessionId: string): void {
 export function cleanupMcpConfigFiles(): void {
   const paths = [
     schemaFilePath(),
-    configFilePath(),
     ...sessionConfigPaths.values(),
   ];
   sessionConfigPaths.clear();
@@ -226,12 +181,4 @@ export function cleanupMcpConfigFiles(): void {
       // Never written, or already gone — ignore
     }
   }
-}
-
-/** Test seam: forget what this process has already written. */
-export function resetMcpConfigCache(): void {
-  lastSchemaJson = undefined;
-  schemaVersion = 0;
-  configWritten = false;
-  sessionConfigPaths.clear();
 }

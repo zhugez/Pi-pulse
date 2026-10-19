@@ -18,9 +18,6 @@ import { usesPiContext } from "./context-policy.js";
 export const TOOL_EXECUTION_DENIED_MESSAGE =
   "Tool execution is unavailable in this environment.";
 
-/** Prefix for MCP (Model Context Protocol) tool names. */
-export const MCP_PREFIX = "mcp__";
-
 /**
  * Claude Code 2.x control_response wire shape: `request_id` lives INSIDE
  * `response`, and allow decisions carry `updatedInput` (the tool input,
