@@ -50,7 +50,7 @@
       "./extensions/antigravity/features/generate-image.ts",
       "./extensions/claude-cli/index.ts",
       "./extensions/exomind/index.ts",
-      "./node_modules/@dietrichgebert/ponytail/pi-extension/index.js"
+      "./extensions/ponytail/index.ts"
     ],
     "skills": [
       "./node_modules/@dietrichgebert/ponytail/skills"

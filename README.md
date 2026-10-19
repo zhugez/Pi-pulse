@@ -176,6 +176,7 @@ See the [Gemini Web Provider Reference](extensions/gemini-web/README.md) for com
 /ponytail default <mode>
 /ponytail-review
 /ponytail-audit
+/pnt-opt
 /ponytail-gain
 /ponytail-debt
 /ponytail-help
