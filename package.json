@@ -48,6 +48,7 @@
       "./extensions/gemini-web/index.ts",
       "./extensions/antigravity/features/google-search.ts",
       "./extensions/antigravity/features/generate-image.ts",
+      "./extensions/claude-cli/index.ts",
       "./node_modules/@dietrichgebert/ponytail/pi-extension/index.js"
     ],
     "skills": [
@@ -64,10 +65,12 @@
     "@earendil-works/pi-ai": "^0.86.1",
     "@earendil-works/pi-coding-agent": "^0.86.1",
     "@earendil-works/pi-tui": "^0.87.1",
+    "@types/cross-spawn": "^6.0.6",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@dietrichgebert/ponytail": "4.12.0",
+    "cross-spawn": "^7.0.6",
     "undici": "^8.11.2"
   },
   "bundleDependencies": [
