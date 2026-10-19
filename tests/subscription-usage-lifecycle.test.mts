@@ -276,8 +276,8 @@ test("/usage shows all providers", async (t) => {
 	await flush();
 	const last = notices.at(-1)!;
 	assert.match(last, /Subscription usage — openai-codex/);
-	assert.match(last, /• 5h: 12%/);
-	assert.match(last, /• weekly: 34%/);
+	assert.match(last, /• 5h\s+12%/);
+	assert.match(last, /• weekly\s+34%/);
 	// Default view covers every provider; unconfigured ones report no data.
 	assert.match(last, /opencode-go/);
 	assert.match(last, /antigravity/);

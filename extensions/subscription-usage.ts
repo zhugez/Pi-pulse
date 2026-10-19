@@ -276,12 +276,13 @@ function utcStamp(ms: number): string {
 	}
 }
 
-/** `YYYY-MM-DD HH:MM GMT+7` in Vietnam timezone for an epoch timestamp. */
-function vnStamp(ms: number): string {
+/** `HH:MM GMT+7` (if today) or `MM-DD HH:MM GMT+7` in Vietnam timezone for an epoch timestamp. */
+function vnStamp(ms: number, now = Date.now()): string {
 	if (!Number.isFinite(ms)) return "unknown time";
 	try {
 		const d = new Date(ms);
-		const fmt = new Intl.DateTimeFormat("en-CA", {
+		const nowDate = new Date(now);
+		const parts = new Intl.DateTimeFormat("en-CA", {
 			timeZone: "Asia/Ho_Chi_Minh",
 			year: "numeric",
 			month: "2-digit",
@@ -289,8 +290,32 @@ function vnStamp(ms: number): string {
 			hour: "2-digit",
 			minute: "2-digit",
 			hour12: false,
-		});
-		return `${fmt.format(d).replace(",", "")} GMT+7`;
+		}).formatToParts(d);
+		const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+		const y = get("year");
+		const m = get("month");
+		const day = get("day");
+		const h = get("hour");
+		const min = get("minute");
+
+		const nowParts = new Intl.DateTimeFormat("en-CA", {
+			timeZone: "Asia/Ho_Chi_Minh",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		}).formatToParts(nowDate);
+		const nowGet = (type: string) => nowParts.find((p) => p.type === type)?.value ?? "";
+		const nowY = nowGet("year");
+		const nowM = nowGet("month");
+		const nowDay = nowGet("day");
+
+		if (y === nowY && m === nowM && day === nowDay) {
+			return `${h}:${min} GMT+7`;
+		}
+		if (y === nowY) {
+			return `${m}-${day} ${h}:${min} GMT+7`;
+		}
+		return `${y}-${m}-${day} ${h}:${min} GMT+7`;
 	} catch {
 		return utcStamp(ms);
 	}
@@ -449,7 +474,14 @@ export function formatUsageDetails(
 		const poolLabel = ` (${normalized.accounts.length} accounts pooled)`;
 		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
 		const lines: string[] = [`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`];
-		for (const acc of normalized.accounts) {
+		// Sort accounts: active first, then standby, then cooldown
+		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
+			if (a.active !== b.active) return a.active ? -1 : 1;
+			if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
+			return a.id.localeCompare(b.id);
+		});
+
+		for (const acc of sortedAccounts) {
 			lines.push("");
 			const icon = acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB";
 			const status = acc.active ? "active" : acc.cooldown ? "cooldown" : "standby";
@@ -469,7 +501,7 @@ export function formatUsageDetails(
 				const reset = acc.resets?.[key];
 				if (typeof reset === "number" && Number.isFinite(reset)) {
 					const rel = resetLabel(reset, now);
-					const abs = vnStamp(reset);
+					const abs = vnStamp(reset, now);
 					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
 				} else {
 					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
@@ -495,30 +527,32 @@ export function formatUsageDetails(
 		if (typeof percent !== "number") continue;
 		const safe = normalizePercent(percent) ?? 0;
 		const cells = detailBar(safe);
+		const paddedKey = key.padEnd(9);
+		const paddedPct = `${safe}%`.padStart(4);
 		const reset = normalized.resets?.[key];
 		if (typeof reset === "number" && Number.isFinite(reset)) {
 			const rel = resetLabel(reset, now);
-			const abs = vnStamp(reset);
-			lines.push(`\u2022 ${key}: ${safe}% ${cells} \u2014 resets ${rel} (${abs})`);
+			const abs = vnStamp(reset, now);
+			lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
 		} else {
-			lines.push(`\u2022 ${key}: ${safe}% ${cells}`);
+			lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
 		}
 	}
 	if (typeof normalized.resetsLeft === "number") {
 		const label =
 			normalized.resetsLeft === 1 ? "1 left" : `${normalized.resetsLeft} left`;
-		lines.push(`\u2022 resets: ${label}`);
+		lines.push(`  \u2022 resets:   ${label}`);
 	}
 	if (normalized.balance) {
-		lines.push(`\u2022 balance: ${formatBalance(normalized.balance)}`);
+		lines.push(`  \u2022 balance:  ${formatBalance(normalized.balance)}`);
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
 		const tag = peak.isPeak
 			? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
 			: deepSeekOffPeakDetail(peak, now);
-		lines.push(`\u2022 deepseek pool: ${tag}`);
-		lines.push(`\u2022 peak windows: ${formatDeepSeekPeakWindows(now)}`);
+		lines.push(`  \u2022 deepseek: ${tag}`);
+		lines.push(`  \u2022 peak win: ${formatDeepSeekPeakWindows(now)}`);
 	}
 	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 		lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);

@@ -383,8 +383,8 @@ test("formatUsageDetails lists every window with resets, plan, and freshness", (
 	const lines = text.split("\n");
 	assert.equal(lines[0], "Subscription usage — openai-codex (plus) • gpt-5");
 	// Preferred order: 5h before weekly regardless of input order.
-	assert.match(lines[1], /• 5h: 12\.5% .* — resets ~4h \(2026-09-06 23:00 GMT\+7\)/);
-	assert.match(lines[2], /• weekly: 51% .* — resets ~3d \(2026-09-09 19:00 GMT\+7\)/);
+	assert.match(lines[1], /• 5h\s+12\.5% .* resets ~4h \(23:00 GMT\+7\)/);
+	assert.match(lines[2], /• weekly\s+51% .* resets ~3d \(09-09 19:00 GMT\+7\)/);
 	assert.equal(lines[3], "Updated 5m ago");
 });
 
@@ -426,7 +426,7 @@ test("formatUsageDetails renders multi-account pooled breakdown", () => {
 test("formatUsageDetails handles missing resets and empty data", () => {
 	const text = formatUsageDetails({ windows: { rolling: 2 } }, "opencode-go", {});
 	assert.match(text, /Subscription usage — opencode-go/);
-	assert.match(text, /• rolling: 2% ░░░░░░/);
+	assert.match(text, /• rolling\s+2% ░░░░░░/);
 	assert.equal(formatUsageDetails({ windows: {} }, "openai-codex"), "openai-codex: no usage data");
 });
 
@@ -438,7 +438,7 @@ test("formatUsageDetails lists resets left when present", () => {
 		},
 		"openai-codex",
 	);
-	assert.match(text, /• resets: 3 left/);
+	assert.match(text, /• resets:\s+3 left/);
 
 	const textZero = formatUsageDetails(
 		{
@@ -447,7 +447,7 @@ test("formatUsageDetails lists resets left when present", () => {
 		},
 		"openai-codex",
 	);
-	assert.match(textZero, /• resets: 0 left/);
+	assert.match(textZero, /• resets:\s+0 left/);
 });
 
 test("getDeepSeekPeakInfo accurately classifies UTC peak and off-peak windows", () => {
@@ -629,16 +629,16 @@ test("formatUsageDetails reports the DeepSeek balance and both peak windows", ()
 		{ now: Date.parse("2026-09-07T02:00:00.000Z") },
 	);
 	assert.match(text, /Subscription usage — deepseek/);
-	assert.match(text, /• balance: \$3\.50/);
-	assert.match(text, /• deepseek pool: Peak hours ~2h left/);
-	assert.match(text, /• peak windows: .*01:00–04:00 UTC, 06:00–10:00 UTC/);
+	assert.match(text, /• balance:\s+\$3\.50/);
+	assert.match(text, /• deepseek:\s+Peak hours ~2h left/);
+	assert.match(text, /• peak win:\s+.*01:00–04:00 UTC, 06:00–10:00 UTC/);
 
 	const offPeakText = formatUsageDetails(
 		{ windows: {}, balance: { currency: "USD", total: 3.5 } },
 		"deepseek",
 		{ now: Date.parse("2026-09-07T05:00:00.000Z") },
 	);
-	assert.match(offPeakText, /• deepseek pool: Off-peak ~1h until peak$/m);
+	assert.match(offPeakText, /• deepseek:\s+Off-peak ~1h until peak$/m);
 
 	// Weekend stretches add the reason, and past a day the absolute resume time.
 	const weekendText = formatUsageDetails(
@@ -646,7 +646,7 @@ test("formatUsageDetails reports the DeepSeek balance and both peak windows", ()
 		"deepseek",
 		{ now: Date.parse("2026-09-05T06:00:00.000Z") },
 	);
-	assert.match(weekendText, /• deepseek pool: Off-peak ~1d until peak \(weekend\) — resumes 2026-09-07 01:00 UTC$/m);
+	assert.match(weekendText, /• deepseek:\s+Off-peak ~1d until peak \(weekend\) — resumes 2026-09-07 01:00 UTC$/m);
 });
 
 test("earliestReset falls back to standard interval if expired reset was already fetched", () => {
