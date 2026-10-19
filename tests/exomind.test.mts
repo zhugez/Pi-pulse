@@ -33,4 +33,5 @@ test("exomind: registers tools and commands with Pi ExtensionAPI", () => {
   assert.ok(commands.has("remember"));
   assert.ok(commands.has("recall"));
   assert.ok(events.has("session_start"));
+  assert.ok(events.has("before_agent_start"));
 });

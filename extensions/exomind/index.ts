@@ -191,8 +191,11 @@ export default function registerExoMind(pi: ExtensionAPI): void {
     },
   });
 
-  // 5. Session start hook: Auto-recall memory context for current project
+  // 5. Session start & prompt injection: Auto-recall memory context for current project
+  let recalledMemory: string | undefined;
+
   pi.on("session_start", async (_event: unknown, ctx: ExtensionContext) => {
+    recalledMemory = undefined;
     try {
       const cwd = (ctx as any)?.cwd ?? process.cwd();
       const projectName = path.basename(cwd);
@@ -208,13 +211,28 @@ export default function registerExoMind(pi: ExtensionAPI): void {
 
       const { stdout, exitCode } = await execExom(args);
       if (exitCode === 0 && stdout.includes("<exomind_memory")) {
-        // Append recalled memory to system prompt for this session
-        if (typeof (ctx as any)?.appendSystemPrompt === "function") {
-          (ctx as any).appendSystemPrompt(stdout.trim());
-        }
+        recalledMemory = stdout.trim();
       }
     } catch {
       // Best-effort context recall
     }
+  });
+
+  pi.on("before_agent_start", async (event: any) => {
+    if (!recalledMemory) {
+      if (event?.systemPromptOptions?.sections) {
+        delete event.systemPromptOptions.sections.exomind;
+      }
+      return;
+    }
+
+    const sections = event?.systemPromptOptions?.sections;
+    if (sections && typeof sections === "object") {
+      sections.exomind = recalledMemory;
+      return;
+    }
+
+    const base = event?.systemPrompt ? `${event.systemPrompt}\n\n` : "";
+    return { systemPrompt: `${base}${recalledMemory}` };
   });
 }

@@ -231,12 +231,16 @@ async function ensureHandoffSocket(): Promise<string | undefined> {
   return handoffSocket;
 }
 
+let cliValidated = false;
+function ensureCliValidated(): void {
+  if (cliValidated) return;
+  validateCliPresence();
+  validateCliAuth();
+  cliValidated = true;
+}
+
 export default function (pi: ExtensionAPI) {
   try {
-    // Startup validation
-    validateCliPresence(); // throws if CLI not on PATH
-    validateCliAuth(); // warns if not authenticated
-
     const models = getModels("anthropic").map((model) => ({
       id: model.id,
       name: model.name,
@@ -279,6 +283,7 @@ export default function (pi: ExtensionAPI) {
       context: Parameters<typeof streamViaCli>[1],
       options?: Parameters<typeof streamViaCli>[2],
     ) => {
+      ensureCliValidated();
       const schema = ensureMcpSchema(pi, context);
       // The socket start is async; the provider awaits it inside its own
       // driver so streamSimple still returns the stream synchronously.
