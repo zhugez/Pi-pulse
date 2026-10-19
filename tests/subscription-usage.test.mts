@@ -682,6 +682,12 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 	assert.deepEqual(resolveRefreshTargets("google", usageProviderCfgs)?.map((c) => c.id), [
 		"antigravity",
 	]);
+	assert.deepEqual(resolveRefreshTargets("claude", usageProviderCfgs)?.map((c) => c.id), [
+		"claude-cli",
+	]);
+	assert.deepEqual(resolveRefreshTargets("claude-cli", usageProviderCfgs)?.map((c) => c.id), [
+		"claude-cli",
+	]);
 });
 
 test("resolveRefreshTargets returns undefined for unresolvable targets", () => {

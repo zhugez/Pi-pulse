@@ -5,6 +5,9 @@
  * subprocess using stream-json NDJSON protocol.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -62,22 +65,59 @@ let lastRateLimitJson: string | undefined;
 
 function publishRateLimit(info: Record<string, unknown>): void {
   const setStatus = uiContext?.ui?.setStatus;
-  if (typeof setStatus !== "function") return;
-  const payload = buildRateLimitPayload(info);
-  // Push only on change: the event repeats every turn, and a status that
-  // rewrites itself constantly is noise for whatever renders it.
-  const identity = rateLimitIdentity(payload);
-  if (identity === lastRateLimitJson) return;
-  lastRateLimitJson = identity;
-  try {
-    setStatus.call(
-      uiContext!.ui,
-      RATE_LIMIT_STATUS_KEY,
-      JSON.stringify(payload),
-    );
-  } catch {
-    /* never break a turn over a status push */
+  if (typeof setStatus === "function") {
+    const payload = buildRateLimitPayload(info);
+    const identity = rateLimitIdentity(payload);
+    if (identity !== lastRateLimitJson) {
+      lastRateLimitJson = identity;
+      try {
+        setStatus.call(
+          uiContext!.ui,
+          RATE_LIMIT_STATUS_KEY,
+          JSON.stringify(payload),
+        );
+      } catch {}
+    }
   }
+
+  // Sync rate limit to subscription-usage-cache.json for /usage command
+  try {
+    const rawType = String(info.rateLimitType || "5h");
+    const windowKey = rawType === "7d" ? "7d" : rawType;
+    const pct = typeof info.utilization === "number" ? Math.round(info.utilization * 100) : 0;
+    const resetSec = typeof info.resetsAt === "number" ? info.resetsAt : undefined;
+    const resetMs = resetSec ? (resetSec < 10_000_000_000 ? resetSec * 1000 : resetSec) : undefined;
+
+    let plan: string | undefined;
+    try {
+      const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
+      const creds = JSON.parse(fs.readFileSync(credPath, "utf8"));
+      if (creds?.claudeAiOauth?.subscriptionType) {
+        plan = String(creds.claudeAiOauth.subscriptionType);
+      }
+    } catch {}
+
+    const cachePath = path.join(os.homedir(), ".pi", "agent", "subscription-usage-cache.json");
+    let existing: Record<string, any> = {};
+    try {
+      existing = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    } catch {}
+
+    const currentData = existing["claude-cli"]?.data ?? { windows: {}, resets: {} };
+    currentData.windows = { ...currentData.windows, [windowKey]: pct };
+    if (resetMs) {
+      currentData.resets = { ...currentData.resets, [windowKey]: resetMs };
+    }
+    if (plan) {
+      currentData.plan = plan;
+    }
+    existing["claude-cli"] = {
+      data: currentData,
+      fetchedAt: Date.now(),
+    };
+
+    fs.writeFileSync(cachePath, JSON.stringify(existing, null, 2), "utf8");
+  } catch {}
 }
 
 /**

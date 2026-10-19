@@ -414,6 +414,7 @@ const DETAIL_WINDOW_ORDER = [
 	"gemini-5h",
 	"3p-5h",
 	"weekly",
+	"7d",
 	"gemini-weekly",
 	"3p-weekly",
 	"monthly",
@@ -1467,6 +1468,57 @@ export const antigravityCfg: ProviderCfg = {
 	},
 };
 
+/** Claude Code CLI: rate limit windows (5h, 7d/weekly) captured from CLI execution. */
+export const claudeCliCfg: ProviderCfg = {
+	id: "claude-cli",
+	async fetchUsage() {
+		let plan: string | undefined;
+		try {
+			const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
+			const creds = JSON.parse(await fs.promises.readFile(credPath, "utf8"));
+			if (creds?.claudeAiOauth?.subscriptionType) {
+				plan = String(creds.claudeAiOauth.subscriptionType);
+			}
+		} catch {
+			// credentials not on disk or unreadable
+		}
+
+		const cached = (await diskCache.read())["claude-cli"]?.data;
+		if (cached && Object.keys(cached.windows || {}).length > 0) {
+			return {
+				...cached,
+				plan: plan ?? cached.plan,
+			};
+		}
+
+		if (plan) {
+			return {
+				windows: {},
+				plan,
+			};
+		}
+
+		throw new MissingCredentialError("no Claude Code credentials in ~/.claude/.credentials.json");
+	},
+	render(data, theme, _modelId, style: UsageStyle = "bars") {
+		const w = data.windows;
+		if (!w || Object.keys(w).length === 0) return "";
+		const parts: string[] = [];
+		for (const [k, label] of [
+			["5h", "5h"],
+			["7d", "7d"],
+			["weekly", "W"],
+		] as const) {
+			const val = w[k];
+			if (typeof val === "number") {
+				parts.push(labeledWindow(label, val, data.resets, k, theme, style));
+			}
+		}
+		if (parts.length === 0) return "";
+		return joinParts(parts, theme);
+	},
+};
+
 /**
  * Every usage provider this extension can query, in display order. `/usage
  * refresh` fans out over this list unless a narrower target is given.
@@ -1475,6 +1527,7 @@ export const usageProviderCfgs: readonly ProviderCfg[] = [
 	opencodeCfg,
 	codexCfg,
 	antigravityCfg,
+	claudeCliCfg,
 	deepseekCfg,
 ];
 
@@ -1487,6 +1540,8 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 	openai: "openai-codex",
 	antigravity: "antigravity",
 	google: "antigravity",
+	claude: "claude-cli",
+	"claude-cli": "claude-cli",
 	deepseek: "deepseek",
 };
 
