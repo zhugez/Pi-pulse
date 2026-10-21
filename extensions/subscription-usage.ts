@@ -323,6 +323,54 @@ function vnStamp(ms: number, now = Date.now()): string {
 	}
 }
 
+// Catppuccin Mocha 24-bit TrueColor palette (https://catppuccin.com/palette/)
+const CTP = {
+	rosewater: "245;224;220", // #f5e0dc
+	flamingo:  "242;205;205", // #f2cdcd
+	pink:      "245;194;231", // #f5c2e7
+	mauve:     "203;166;247", // #cba6f7
+	red:       "243;139;168", // #f38ba8
+	maroon:    "235;160;172", // #eba0ac
+	peach:     "250;179;135", // #fab387
+	yellow:    "249;226;175", // #f9e2af
+	green:     "166;227;161", // #a6e3a1
+	teal:      "148;226;213", // #94e2d5
+	sky:       "137;220;235", // #89dceb
+	sapphire:  "116;199;236", // #74c7ec
+	blue:      "137;180;250", // #89b4fa
+	lavender:  "180;190;254", // #b4befe
+	text:      "205;214;244", // #cdd6f4
+	subtext0:  "166;173;200", // #a6adc8
+	overlay1:  "127;132;156", // #7f849c
+	surface2:  "88;91;112",   // #585b70
+} as const;
+
+type CtpColor = keyof typeof CTP;
+
+function ctp(color: CtpColor, text: string): string {
+	return `\x1b[22;38;2;${CTP[color]}m${text}\x1b[39m`;
+}
+
+function isColorTheme(theme?: { fg(color: string, text: string): string }): boolean {
+	return Boolean(theme && theme.fg("accent", "x") !== "x");
+}
+
+function ctpBandColor(safePercent: number): CtpColor {
+	if (safePercent > 85) return "red";
+	if (safePercent > 70) return "peach";
+	if (safePercent > 50) return "yellow";
+	if (safePercent > 25) return "teal";
+	return "green";
+}
+
+function providerCtpColor(providerId: string): CtpColor {
+	if (providerId.includes("antigravity") || providerId.includes("gemini")) return "sapphire";
+	if (providerId.includes("codex") || providerId.includes("openai")) return "green";
+	if (providerId.includes("claude")) return "peach";
+	if (providerId.includes("deepseek")) return "blue";
+	return "teal";
+}
+
 function usageBandColor(safePercent: number): string {
 	if (safePercent > 85) return "error";
 	if (safePercent > 60) return "warning";
@@ -341,13 +389,27 @@ export function bar(
 	const safePercent = normalizePercent(percent) ?? 0;
 	const filled = Math.round((safePercent / 100) * BAR_CELLS);
 	const empty = BAR_CELLS - filled;
+	const useCtp = isColorTheme(theme);
+	const band = ctpBandColor(safePercent);
 	const color = usageBandColor(safePercent);
-	const filledPart = filled > 0 ? theme.fg(color, "█".repeat(filled)) : "";
-	const emptyPart = empty > 0 ? theme.fg("dim", "░".repeat(empty)) : "";
-	let out = `${filledPart}${emptyPart}  ${theme.fg(color, `${safePercent}%`)}`;
+	const filledPart =
+		filled > 0
+			? useCtp
+				? ctp(band, "█".repeat(filled))
+				: theme.fg(color, "█".repeat(filled))
+			: "";
+	const emptyPart =
+		empty > 0
+			? useCtp
+				? ctp("surface2", "░".repeat(empty))
+				: theme.fg("dim", "░".repeat(empty))
+			: "";
+	const pctPart = useCtp ? ctp(band, `${safePercent}%`) : theme.fg(color, `${safePercent}%`);
+	let out = `${filledPart}${emptyPart}  ${pctPart}`;
 	const r = resets?.[key];
 	if (typeof r === "number" && Number.isFinite(r)) {
-		out += ` ${theme.fg("muted", resetLabel(r, now))}`;
+		const lbl = resetLabel(r, now);
+		out += ` ${useCtp ? ctp("subtext0", lbl) : theme.fg("muted", lbl)}`;
 	}
 	return out;
 }
@@ -366,11 +428,14 @@ export function windowSegment(
 ): string {
 	if (style === "percent") {
 		const safePercent = normalizePercent(percent) ?? 0;
+		const useCtp = isColorTheme(theme);
+		const band = ctpBandColor(safePercent);
 		const color = usageBandColor(safePercent);
-		let out = theme.fg(color, `${safePercent}%`);
+		let out = useCtp ? ctp(band, `${safePercent}%`) : theme.fg(color, `${safePercent}%`);
 		const r = resets?.[key];
 		if (typeof r === "number" && Number.isFinite(r)) {
-			out += ` ${theme.fg("muted", resetLabel(r, now))}`;
+			const lbl = resetLabel(r, now);
+			out += ` ${useCtp ? ctp("subtext0", lbl) : theme.fg("muted", lbl)}`;
 		}
 		return out;
 	}
@@ -388,7 +453,8 @@ function labeledWindow(
 	now = Date.now(),
 ): string {
 	const sep = style === "percent" ? " " : ": ";
-	return `${theme.fg("accent", label)}${sep}${windowSegment(percent, resets, key, theme, style, now)}`;
+	const lbl = isColorTheme(theme) ? ctp("lavender", label) : theme.fg("accent", label);
+	return `${lbl}${sep}${windowSegment(percent, resets, key, theme, style, now)}`;
 }
 
 /** Join window segments with a dim middot (footer collapses runs of spaces). */
@@ -396,7 +462,8 @@ function joinParts(
 	parts: string[],
 	theme: { fg(color: string, text: string): string },
 ): string {
-	return parts.join(` ${theme.fg("dim", "·")} `);
+	const dot = isColorTheme(theme) ? ctp("overlay1", "·") : theme.fg("dim", "·");
+	return parts.join(` ${dot} `);
 }
 
 
@@ -465,14 +532,14 @@ export function formatBalance(balance: UsageBalance): string {
  */
 function detailColoredBar(
 	percent: number,
-	c: (color: string, text: string) => string,
+	c: (color: CtpColor, text: string) => string,
 ): string {
 	const safe = normalizePercent(percent) ?? 0;
 	const filled = Math.round((safe / 100) * BAR_CELLS);
 	const empty = BAR_CELLS - filled;
-	const color = usageBandColor(safe);
-	const f = filled > 0 ? c(color, "█".repeat(filled)) : "";
-	const e = empty > 0 ? c("dim", "░".repeat(empty)) : "";
+	const band = ctpBandColor(safe);
+	const f = filled > 0 ? c(band, "█".repeat(filled)) : "";
+	const e = empty > 0 ? c("surface2", "░".repeat(empty)) : "";
 	return `${f}${e}`;
 }
 
@@ -511,14 +578,12 @@ export function formatUsageDetails(
 	} = {},
 ): string {
 	const now = options.now ?? Date.now();
-	const theme = options.theme;
-	const hasColor = Boolean(theme && theme.fg("accent", "x") !== "x");
-	const c = (color: string, text: string) =>
-		hasColor && theme ? `\x1b[22m${theme.fg(color, text)}` : text;
+	const hasColor = isColorTheme(options.theme);
+	const c = (color: CtpColor, text: string) => (hasColor ? ctp(color, text) : text);
 	const nf = (glyph: string) => (hasColor ? `${glyph} ` : "");
 
 	const normalized = normalizeUsageData(data);
-	if (!normalized) return `${c("muted", providerId)}: ${c("dim", "no usage data")}`;
+	if (!normalized) return `${c("overlay1", providerId)}: ${c("surface2", "no usage data")}`;
 
 	const renderWindowLine = (
 		key: string,
@@ -526,28 +591,29 @@ export function formatUsageDetails(
 		resets: Record<string, number> | undefined,
 	) => {
 		const safe = normalizePercent(percent) ?? 0;
-		const band = usageBandColor(safe);
+		const band = ctpBandColor(safe);
 		const cells = hasColor ? detailColoredBar(safe, c) : detailBar(safe);
-		const paddedKey = c("syntaxType", key.padEnd(9));
+		const paddedKey = c("lavender", key.padEnd(9));
 		const paddedPct = c(band, `${safe}%`.padStart(4));
-		const bullet = c("accent", "\u2022");
+		const bullet = c("mauve", "\u2022");
 		const reset = resets?.[key];
 		if (typeof reset === "number" && Number.isFinite(reset)) {
-			const rel = c("warning", resetLabel(reset, now));
-			const abs = c("muted", `(${vnStamp(reset, now)})`);
-			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("muted", `${nf(NF_USAGE_ICONS.clock)}resets`)} ${rel} ${abs}`;
+			const rel = c("yellow", resetLabel(reset, now));
+			const abs = c("subtext0", `(${vnStamp(reset, now)})`);
+			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("subtext0", `${nf(NF_USAGE_ICONS.clock)}resets`)} ${rel} ${abs}`;
 		}
 		return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}`;
 	};
 
 	const pIcon = nf(providerNerdIcon(providerId));
+	const pColor = providerCtpColor(providerId);
 	const hIcon = nf(NF_USAGE_ICONS.gauge);
 
 	if (normalized.accounts && normalized.accounts.length > 1) {
-		const poolLabel = c("syntaxType", ` (${normalized.accounts.length} accounts pooled)`);
-		const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
+		const poolLabel = c("sky", ` (${normalized.accounts.length} accounts pooled)`);
+		const headerModel = options.modelId ? `${c("overlay1", " \u2022 ")}${c("flamingo", options.modelId)}` : "";
 		const lines: string[] = [
-			`${c("accent", `${hIcon}Subscription usage`)} ${c("muted", "\u2014")} ${c("syntaxFunction", `${pIcon}${providerId}`)}${poolLabel}${headerModel}`,
+			`${c("mauve", `${hIcon}Subscription usage`)} ${c("overlay1", "\u2014")} ${c(pColor, `${pIcon}${providerId}`)}${poolLabel}${headerModel}`,
 		];
 		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 			if (a.active !== b.active) return a.active ? -1 : 1;
@@ -557,7 +623,7 @@ export function formatUsageDetails(
 
 		for (const acc of sortedAccounts) {
 			lines.push("");
-			const stateColor = acc.active ? "success" : acc.cooldown ? "warning" : "accent";
+			const stateColor: CtpColor = acc.active ? "green" : acc.cooldown ? "yellow" : "sapphire";
 			const rawIcon = acc.active
 				? hasColor ? NF_USAGE_ICONS.active : "\u25CF"
 				: acc.cooldown
@@ -565,9 +631,9 @@ export function formatUsageDetails(
 					: hasColor ? NF_USAGE_ICONS.standby : "\u25CB";
 			const icon = c(stateColor, rawIcon);
 			const status = c(stateColor, acc.active ? "active" : acc.cooldown ? "cooldown" : "standby");
-			const planText = acc.plan ? `${c("muted", " \u2022 ")}${c("syntaxKeyword", acc.plan)}` : "";
-			const idText = c(acc.active ? "text" : "muted", acc.id);
-			lines.push(`${icon} ${idText} ${c("muted", "[")}${status}${planText}${c("muted", "]")}`);
+			const planText = acc.plan ? `${c("overlay1", " \u2022 ")}${c("pink", acc.plan)}` : "";
+			const idText = c(acc.active ? "text" : "subtext0", acc.id);
+			lines.push(`${icon} ${idText} ${c("overlay1", "[")}${status}${planText}${c("overlay1", "]")}`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
@@ -580,15 +646,15 @@ export function formatUsageDetails(
 		}
 		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 			lines.push("");
-			lines.push(`${c("muted", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
+			lines.push(`${c("subtext0", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("green", fetchAgeLabel(options.fetchedAt, now))}`);
 		}
 		return lines.join("\n");
 	}
 
-	const headerPlan = normalized.plan ? c("syntaxKeyword", ` (${normalized.plan})`) : "";
-	const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
+	const headerPlan = normalized.plan ? c("pink", ` (${normalized.plan})`) : "";
+	const headerModel = options.modelId ? `${c("overlay1", " \u2022 ")}${c("flamingo", options.modelId)}` : "";
 	const lines: string[] = [
-		`${c("accent", `${hIcon}Subscription usage`)} ${c("muted", "\u2014")} ${c("syntaxFunction", `${pIcon}${providerId}`)}${headerPlan}${headerModel}`,
+		`${c("mauve", `${hIcon}Subscription usage`)} ${c("overlay1", "\u2014")} ${c(pColor, `${pIcon}${providerId}`)}${headerPlan}${headerModel}`,
 	];
 	const keys = Object.keys(normalized.windows).sort((a, b) => {
 		const order = detailWindowOrder(a) - detailWindowOrder(b);
@@ -602,22 +668,22 @@ export function formatUsageDetails(
 	if (typeof normalized.resetsLeft === "number") {
 		const label =
 			normalized.resetsLeft === 1 ? "1 left" : `${normalized.resetsLeft} left`;
-		const rColor = normalized.resetsLeft > 0 ? "success" : "muted";
-		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "resets:  ")} ${c(rColor, label)}`);
+		const rColor: CtpColor = normalized.resetsLeft > 0 ? "green" : "overlay1";
+		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "resets:  ")} ${c(rColor, label)}`);
 	}
 	if (normalized.balance) {
-		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "balance: ")} ${c("success", `${nf(NF_USAGE_ICONS.wallet)}${formatBalance(normalized.balance)}`)}`);
+		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "balance: ")} ${c("green", `${nf(NF_USAGE_ICONS.wallet)}${formatBalance(normalized.balance)}`)}`);
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
 		const tag = peak.isPeak
 			? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
 			: deepSeekOffPeakDetail(peak, now);
-		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "deepseek:")} ${c(peak.isPeak ? "warning" : "success", tag)}`);
-		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "peak win:")} ${c("muted", formatDeepSeekPeakWindows(now))}`);
+		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "deepseek:")} ${c(peak.isPeak ? "peach" : "green", tag)}`);
+		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "peak win:")} ${c("subtext0", formatDeepSeekPeakWindows(now))}`);
 	}
 	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
-		lines.push(`${c("muted", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
+		lines.push(`${c("subtext0", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("green", fetchAgeLabel(options.fetchedAt, now))}`);
 	}
 	return lines.join("\n");
 }
@@ -2277,7 +2343,7 @@ export default function (pi: ExtensionAPI) {
 					arm(activeCfg, ctx, nextDelay(s, Date.now(), current?.id, activeCfg.id));
 			}
 			const uiTheme = safeUi(ctx)?.theme;
-			const hasColor = Boolean(uiTheme && uiTheme.fg("accent", "x") !== "x");
+			const hasColor = isColorTheme(uiTheme);
 			const sections: string[] = [];
 			for (const cfg of cfgs) {
 				const state = cache.get(cfg.id);
@@ -2299,8 +2365,8 @@ export default function (pi: ExtensionAPI) {
 				sections.push(
 					data
 						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now(), theme: uiTheme })
-						: hasColor && uiTheme
-							? `\x1b[22m${uiTheme.fg("muted", `${providerNerdIcon(cfg.id)} ${cfg.id}`)}${uiTheme.fg("dim", `: ${emptyMsg}`)}`
+						: hasColor
+							? `${ctp("overlay1", `${providerNerdIcon(cfg.id)} ${cfg.id}`)}${ctp("surface2", `: ${emptyMsg}`)}`
 							: `${cfg.id}: ${emptyMsg}`,
 				);
 			}
