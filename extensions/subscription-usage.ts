@@ -315,15 +315,15 @@ function vnStamp(ms: number, now = Date.now()): string {
 			return `${h}:${min} GMT+7`;
 		}
 		if (y === nowY) {
-			return `${m}-${day} ${h}:${min} GMT+7`;
+			return `${day}-${m} ${h}:${min} GMT+7`;
 		}
-		return `${y}-${m}-${day} ${h}:${min} GMT+7`;
+		return `${day}-${m}-${y} ${h}:${min} GMT+7`;
 	} catch {
 		return utcStamp(ms);
 	}
 }
 
-/** Fixed 5-char Vietnam timestamp for tabular alignment: `HH:MM` (today) or `MM-DD` (other day). */
+/** Compact Vietnam timestamp (`DD/MM HH:MM` or `HH:MM` if today) in `Asia/Ho_Chi_Minh`. */
 function vnShortStamp(ms: number, now = Date.now()): string {
 	if (!Number.isFinite(ms)) return "??:??";
 	try {
@@ -340,13 +340,15 @@ function vnShortStamp(ms: number, now = Date.now()): string {
 		const nowParts = fmt.formatToParts(new Date(now));
 		const get = (arr: Intl.DateTimeFormatPart[], t: string) =>
 			arr.find((p) => p.type === t)?.value ?? "";
+		const day = get(parts, "day");
+		const m = get(parts, "month");
+		const h = get(parts, "hour");
+		const min = get(parts, "minute");
 		const sameDay =
 			get(parts, "year") === get(nowParts, "year") &&
-			get(parts, "month") === get(nowParts, "month") &&
-			get(parts, "day") === get(nowParts, "day");
-		return sameDay
-			? `${get(parts, "hour")}:${get(parts, "minute")}`
-			: `${get(parts, "month")}-${get(parts, "day")}`;
+			m === get(nowParts, "month") &&
+			day === get(nowParts, "day");
+		return sameDay ? `${h}:${min}` : `${day}/${m} ${h}:${min}`;
 	} catch {
 		return "??:??";
 	}
@@ -627,23 +629,28 @@ export function formatUsageDetails(
 			key: string,
 			percent: number,
 			resets: Record<string, number> | undefined,
-		): string => {
+		): { text: string; width: number } => {
 			const safe = normalizePercent(percent) ?? 0;
 			const reset = resets?.[key];
 			const hasReset = typeof reset === "number" && Number.isFinite(reset);
 			const expired = hasReset && reset <= now;
+			const shownPct = expired ? 0 : safe;
 			const band: CtpColor = expired ? "overlay1" : ctpBandColor(safe);
-			const cells = detailColoredBar(expired ? 0 : safe, c);
-			const sKey = c("lavender", shortWindowKey(key));
-			const sPct = c(band, `${expired ? 0 : safe}%`.padStart(4));
+			const cells = detailColoredBar(shownPct, c);
+			const rawKey = shortWindowKey(key);
+			const rawPct = `${shownPct}%`.padStart(4);
+			const sKey = c("lavender", rawKey);
+			const sPct = c(band, rawPct);
 			if (hasReset) {
-				const rel = expired
-					? c("teal", "done")
-					: c("yellow", resetLabel(reset, now).padEnd(4));
-				const abs = c(expired ? "surface2" : "subtext0", `(${vnShortStamp(reset, now)})`);
-				return `${sKey} ${cells} ${sPct} ${rel} ${abs}`;
+				const rawRel = expired ? "done" : resetLabel(reset, now).padEnd(4);
+				const rawAbs = `(${vnShortStamp(reset, now)})`;
+				const rel = expired ? c("teal", rawRel) : c("yellow", rawRel);
+				const abs = c(expired ? "surface2" : "subtext0", rawAbs);
+				const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length + 1 + rawRel.length + 1 + rawAbs.length;
+				return { text: `${sKey} ${cells} ${sPct} ${rel} ${abs}`, width };
 			}
-			return `${sKey} ${cells} ${sPct}`;
+			const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length;
+			return { text: `${sKey} ${cells} ${sPct}`, width };
 		};
 
 		if (normalized.accounts && normalized.accounts.length > 1) {
@@ -665,7 +672,7 @@ export function formatUsageDetails(
 				a.plan ?? (a.active ? "active" : a.cooldown ? "cooldown" : "standby");
 			const maxBadgeLen = Math.max(...sortedAccounts.map((a) => badgeLabel(a).length));
 
-			for (const acc of sortedAccounts) {
+			const accountRows = sortedAccounts.map((acc) => {
 				const stateColor: CtpColor = acc.active ? "green" : acc.cooldown ? "yellow" : "sapphire";
 				const rawIcon = acc.active ? "●" : acc.cooldown ? "⏳" : "○";
 				const icon = c(stateColor, rawIcon);
@@ -679,13 +686,27 @@ export function formatUsageDetails(
 					const order = detailWindowOrder(a) - detailWindowOrder(b);
 					return order !== 0 ? order : a.localeCompare(b);
 				});
-				const windowCells: string[] = [];
+				const cells: { text: string; width: number }[] = [];
 				for (const key of keys) {
 					const percent = acc.windows[key];
 					if (typeof percent !== "number") continue;
-					windowCells.push(renderCompactCell(key, percent, acc.resets));
+					cells.push(renderCompactCell(key, percent, acc.resets));
 				}
-				lines.push(`  ${icon} ${idText} ${badge}  ${windowCells.join(sepPipe)}`);
+				return { prefix: `  ${icon} ${idText} ${badge}  `, cells };
+			});
+
+			const colCount = Math.max(0, ...accountRows.map((r) => r.cells.length));
+			const colWidths = Array.from({ length: colCount }, (_, colIdx) =>
+				Math.max(0, ...accountRows.map((r) => r.cells[colIdx]?.width ?? 0)),
+			);
+
+			for (const row of accountRows) {
+				const paddedCells = row.cells.map((cell, idx) =>
+					idx < row.cells.length - 1
+						? cell.text + " ".repeat(Math.max(0, colWidths[idx] - cell.width))
+						: cell.text,
+				);
+				lines.push(`${row.prefix}${paddedCells.join(sepPipe)}`);
 			}
 			return lines.join("\n");
 		}
@@ -716,7 +737,7 @@ export function formatUsageDetails(
 		for (const key of keys) {
 			const percent = normalized.windows[key];
 			if (typeof percent !== "number") continue;
-			windowCells.push(`${c("mauve", "•")} ${renderCompactCell(key, percent, normalized.resets)}`);
+			windowCells.push(`${c("mauve", "•")} ${renderCompactCell(key, percent, normalized.resets).text}`);
 		}
 		if (typeof normalized.resetsLeft === "number" && normalized.resetsLeft > 0) {
 			const label = normalized.resetsLeft === 1 ? "1 reset left" : `${normalized.resetsLeft} resets left`;
