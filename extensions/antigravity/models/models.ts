@@ -554,16 +554,17 @@ export function getThinkingConfig(
     if (!effort || effort === "off") return { includeThoughts: false, thinkingBudget: 0 };
     return { includeThoughts: true, thinkingBudget: 8192 };
   }
+  const includeGeminiThoughts = process.env.PI_AG_INCLUDE_THOUGHTS === "1";
   if (modelId.startsWith("gemini-3.5-flash") || modelId === "gemini-3-flash-agent") {
     if (!effort || effort === "off") return { includeThoughts: false, thinkingBudget: 0 };
     const thinkingBudget =
       effort === "high" || effort === "xhigh" ? 10_000 : effort === "medium" ? 4_000 : 1_000;
-    return { includeThoughts: true, thinkingBudget };
+    return { includeThoughts: includeGeminiThoughts, thinkingBudget };
   }
   if (modelId.startsWith("gemini-3.1-pro") || modelId === "gemini-pro-agent") {
     if (!effort || effort === "off") return { includeThoughts: false, thinkingBudget: 0 };
     return {
-      includeThoughts: true,
+      includeThoughts: includeGeminiThoughts,
       thinkingBudget: effort === "high" || effort === "xhigh" ? 10_001 : 1_001,
     };
   }
@@ -571,7 +572,7 @@ export function getThinkingConfig(
     if (!effort || effort === "off") return { includeThoughts: false, thinkingBudget: 0 };
     const thinkingBudget =
       effort === "high" || effort === "xhigh" ? -1 : effort === "medium" ? 4_000 : 1_000;
-    return { includeThoughts: true, thinkingBudget };
+    return { includeThoughts: includeGeminiThoughts, thinkingBudget };
   }
   return undefined;
 }
