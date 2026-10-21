@@ -476,6 +476,30 @@ function detailColoredBar(
 	return `${f}${e}`;
 }
 
+// Nerd Fonts v3 Material Design glyphs (https://www.nerdfonts.com/cheat-sheet)
+const NF_USAGE_ICONS = {
+	gauge: "\u{f04c5}",      // nf-md-speedometer (󰓅)
+	active: "\u{f05e0}",     // nf-md-check_circle (󰗠)
+	cooldown: "\u{f051f}",   // nf-md-timer_sand (󰔟)
+	standby: "\u{f03e6}",    // nf-md-pause_circle_outline (󰏦)
+	clock: "\u{f0150}",      // nf-md-clock_outline (󰅐)
+	refresh: "\u{f0450}",    // nf-md-refresh (󰑐)
+	wallet: "\u{f0bdd}",     // nf-md-wallet_outline (󰯝)
+	google: "\u{f02ad}",     // nf-md-google (󰊭)
+	brain: "\u{f09d1}",      // nf-md-brain (󰧑)
+	robot: "\u{f167a}",      // nf-md-robot_outline (󱙺)
+	fire: "\u{f0238}",       // nf-md-fire (󰈸)
+	network: "\u{f048d}",    // nf-md-server_network (󰒍)
+} as const;
+
+function providerNerdIcon(providerId: string): string {
+	if (providerId.includes("antigravity") || providerId.includes("gemini")) return NF_USAGE_ICONS.google;
+	if (providerId.includes("codex") || providerId.includes("openai")) return NF_USAGE_ICONS.brain;
+	if (providerId.includes("claude")) return NF_USAGE_ICONS.robot;
+	if (providerId.includes("deepseek")) return NF_USAGE_ICONS.fire;
+	return NF_USAGE_ICONS.network;
+}
+
 export function formatUsageDetails(
 	data: UsageData,
 	providerId: string,
@@ -491,6 +515,7 @@ export function formatUsageDetails(
 	const hasColor = Boolean(theme && theme.fg("accent", "x") !== "x");
 	const c = (color: string, text: string) =>
 		hasColor && theme ? `\x1b[22m${theme.fg(color, text)}` : text;
+	const nf = (glyph: string) => (hasColor ? `${glyph} ` : "");
 
 	const normalized = normalizeUsageData(data);
 	if (!normalized) return `${c("muted", providerId)}: ${c("dim", "no usage data")}`;
@@ -510,16 +535,19 @@ export function formatUsageDetails(
 		if (typeof reset === "number" && Number.isFinite(reset)) {
 			const rel = c("warning", resetLabel(reset, now));
 			const abs = c("muted", `(${vnStamp(reset, now)})`);
-			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("muted", "resets")} ${rel} ${abs}`;
+			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("muted", `${nf(NF_USAGE_ICONS.clock)}resets`)} ${rel} ${abs}`;
 		}
 		return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}`;
 	};
+
+	const pIcon = nf(providerNerdIcon(providerId));
+	const hIcon = nf(NF_USAGE_ICONS.gauge);
 
 	if (normalized.accounts && normalized.accounts.length > 1) {
 		const poolLabel = c("syntaxType", ` (${normalized.accounts.length} accounts pooled)`);
 		const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
 		const lines: string[] = [
-			`${c("accent", "Subscription usage")} ${c("muted", "\u2014")} ${c("syntaxFunction", providerId)}${poolLabel}${headerModel}`,
+			`${c("accent", `${hIcon}Subscription usage`)} ${c("muted", "\u2014")} ${c("syntaxFunction", `${pIcon}${providerId}`)}${poolLabel}${headerModel}`,
 		];
 		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 			if (a.active !== b.active) return a.active ? -1 : 1;
@@ -530,7 +558,12 @@ export function formatUsageDetails(
 		for (const acc of sortedAccounts) {
 			lines.push("");
 			const stateColor = acc.active ? "success" : acc.cooldown ? "warning" : "accent";
-			const icon = c(stateColor, acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB");
+			const rawIcon = acc.active
+				? hasColor ? NF_USAGE_ICONS.active : "\u25CF"
+				: acc.cooldown
+					? hasColor ? NF_USAGE_ICONS.cooldown : "\u23F3"
+					: hasColor ? NF_USAGE_ICONS.standby : "\u25CB";
+			const icon = c(stateColor, rawIcon);
 			const status = c(stateColor, acc.active ? "active" : acc.cooldown ? "cooldown" : "standby");
 			const planText = acc.plan ? `${c("muted", " \u2022 ")}${c("syntaxKeyword", acc.plan)}` : "";
 			const idText = c(acc.active ? "text" : "muted", acc.id);
@@ -547,7 +580,7 @@ export function formatUsageDetails(
 		}
 		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 			lines.push("");
-			lines.push(`${c("muted", "Updated")} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
+			lines.push(`${c("muted", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
 		}
 		return lines.join("\n");
 	}
@@ -555,7 +588,7 @@ export function formatUsageDetails(
 	const headerPlan = normalized.plan ? c("syntaxKeyword", ` (${normalized.plan})`) : "";
 	const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
 	const lines: string[] = [
-		`${c("accent", "Subscription usage")} ${c("muted", "\u2014")} ${c("syntaxFunction", providerId)}${headerPlan}${headerModel}`,
+		`${c("accent", `${hIcon}Subscription usage`)} ${c("muted", "\u2014")} ${c("syntaxFunction", `${pIcon}${providerId}`)}${headerPlan}${headerModel}`,
 	];
 	const keys = Object.keys(normalized.windows).sort((a, b) => {
 		const order = detailWindowOrder(a) - detailWindowOrder(b);
@@ -573,7 +606,7 @@ export function formatUsageDetails(
 		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "resets:  ")} ${c(rColor, label)}`);
 	}
 	if (normalized.balance) {
-		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "balance: ")} ${c("success", formatBalance(normalized.balance))}`);
+		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "balance: ")} ${c("success", `${nf(NF_USAGE_ICONS.wallet)}${formatBalance(normalized.balance)}`)}`);
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
@@ -584,7 +617,7 @@ export function formatUsageDetails(
 		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "peak win:")} ${c("muted", formatDeepSeekPeakWindows(now))}`);
 	}
 	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
-		lines.push(`${c("muted", "Updated")} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
+		lines.push(`${c("muted", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
 	}
 	return lines.join("\n");
 }
@@ -2267,7 +2300,7 @@ export default function (pi: ExtensionAPI) {
 					data
 						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now(), theme: uiTheme })
 						: hasColor && uiTheme
-							? `\x1b[22m${uiTheme.fg("muted", cfg.id)}${uiTheme.fg("dim", `: ${emptyMsg}`)}`
+							? `\x1b[22m${uiTheme.fg("muted", `${providerNerdIcon(cfg.id)} ${cfg.id}`)}${uiTheme.fg("dim", `: ${emptyMsg}`)}`
 							: `${cfg.id}: ${emptyMsg}`,
 				);
 			}
