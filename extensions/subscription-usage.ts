@@ -323,6 +323,13 @@ function vnStamp(ms: number, now = Date.now()): string {
 	}
 }
 
+function usageBandColor(safePercent: number): string {
+	if (safePercent > 85) return "error";
+	if (safePercent > 60) return "warning";
+	if (safePercent > 30) return "accent";
+	return "success";
+}
+
 /** Build a single bar segment: filled/empty cells + percent + reset countdown. */
 export function bar(
 	percent: number,
@@ -333,17 +340,14 @@ export function bar(
 ): string {
 	const safePercent = normalizePercent(percent) ?? 0;
 	const filled = Math.round((safePercent / 100) * BAR_CELLS);
-	const cells = "█".repeat(filled) + "░".repeat(BAR_CELLS - filled);
-	let color = "dim";
-	if (safePercent > 90) {
-		color = "error";
-	} else if (safePercent > 70) {
-		color = "warning";
-	}
-	let out = `${theme.fg(color, cells)}  ${safePercent}%`;
+	const empty = BAR_CELLS - filled;
+	const color = usageBandColor(safePercent);
+	const filledPart = filled > 0 ? theme.fg(color, "█".repeat(filled)) : "";
+	const emptyPart = empty > 0 ? theme.fg("dim", "░".repeat(empty)) : "";
+	let out = `${filledPart}${emptyPart}  ${theme.fg(color, `${safePercent}%`)}`;
 	const r = resets?.[key];
 	if (typeof r === "number" && Number.isFinite(r)) {
-		out += ` ${theme.fg("dim", resetLabel(r, now))}`;
+		out += ` ${theme.fg("muted", resetLabel(r, now))}`;
 	}
 	return out;
 }
@@ -362,16 +366,11 @@ export function windowSegment(
 ): string {
 	if (style === "percent") {
 		const safePercent = normalizePercent(percent) ?? 0;
-		let color = "dim";
-		if (safePercent > 90) {
-			color = "error";
-		} else if (safePercent > 70) {
-			color = "warning";
-		}
+		const color = usageBandColor(safePercent);
 		let out = theme.fg(color, `${safePercent}%`);
 		const r = resets?.[key];
 		if (typeof r === "number" && Number.isFinite(r)) {
-			out += ` ${theme.fg("dim", resetLabel(r, now))}`;
+			out += ` ${theme.fg("muted", resetLabel(r, now))}`;
 		}
 		return out;
 	}
@@ -389,7 +388,7 @@ function labeledWindow(
 	now = Date.now(),
 ): string {
 	const sep = style === "percent" ? " " : ": ";
-	return `${label}${sep}${windowSegment(percent, resets, key, theme, style, now)}`;
+	return `${theme.fg("accent", label)}${sep}${windowSegment(percent, resets, key, theme, style, now)}`;
 }
 
 /** Join window segments with a dim middot (footer collapses runs of spaces). */
@@ -464,20 +463,64 @@ export function formatBalance(balance: UsageBalance): string {
  * active model's pool. Shows per-window percent + bar + relative reset
  * countdown + absolute reset time, plus plan and freshness when known.
  */
+function detailColoredBar(
+	percent: number,
+	c: (color: string, text: string) => string,
+): string {
+	const safe = normalizePercent(percent) ?? 0;
+	const filled = Math.round((safe / 100) * BAR_CELLS);
+	const empty = BAR_CELLS - filled;
+	const color = usageBandColor(safe);
+	const f = filled > 0 ? c(color, "█".repeat(filled)) : "";
+	const e = empty > 0 ? c("dim", "░".repeat(empty)) : "";
+	return `${f}${e}`;
+}
+
 export function formatUsageDetails(
 	data: UsageData,
 	providerId: string,
-	options: { modelId?: string; fetchedAt?: number; now?: number } = {},
+	options: {
+		modelId?: string;
+		fetchedAt?: number;
+		now?: number;
+		theme?: { fg(color: string, text: string): string };
+	} = {},
 ): string {
 	const now = options.now ?? Date.now();
+	const theme = options.theme;
+	const hasColor = Boolean(theme && theme.fg("accent", "x") !== "x");
+	const c = (color: string, text: string) =>
+		hasColor && theme ? `\x1b[22m${theme.fg(color, text)}` : text;
+
 	const normalized = normalizeUsageData(data);
-	if (!normalized) return `${providerId}: no usage data`;
+	if (!normalized) return `${c("muted", providerId)}: ${c("dim", "no usage data")}`;
+
+	const renderWindowLine = (
+		key: string,
+		percent: number,
+		resets: Record<string, number> | undefined,
+	) => {
+		const safe = normalizePercent(percent) ?? 0;
+		const band = usageBandColor(safe);
+		const cells = hasColor ? detailColoredBar(safe, c) : detailBar(safe);
+		const paddedKey = c("syntaxType", key.padEnd(9));
+		const paddedPct = c(band, `${safe}%`.padStart(4));
+		const bullet = c("accent", "\u2022");
+		const reset = resets?.[key];
+		if (typeof reset === "number" && Number.isFinite(reset)) {
+			const rel = c("warning", resetLabel(reset, now));
+			const abs = c("muted", `(${vnStamp(reset, now)})`);
+			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("muted", "resets")} ${rel} ${abs}`;
+		}
+		return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}`;
+	};
 
 	if (normalized.accounts && normalized.accounts.length > 1) {
-		const poolLabel = ` (${normalized.accounts.length} accounts pooled)`;
-		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
-		const lines: string[] = [`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`];
-		// Sort accounts: active first, then standby, then cooldown
+		const poolLabel = c("syntaxType", ` (${normalized.accounts.length} accounts pooled)`);
+		const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
+		const lines: string[] = [
+			`${c("accent", "Subscription usage")} ${c("muted", "\u2014")} ${c("syntaxFunction", providerId)}${poolLabel}${headerModel}`,
+		];
 		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 			if (a.active !== b.active) return a.active ? -1 : 1;
 			if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
@@ -486,10 +529,12 @@ export function formatUsageDetails(
 
 		for (const acc of sortedAccounts) {
 			lines.push("");
-			const icon = acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB";
-			const status = acc.active ? "active" : acc.cooldown ? "cooldown" : "standby";
-			const planText = acc.plan ? ` \u2022 ${acc.plan}` : "";
-			lines.push(`${icon} ${acc.id} [${status}${planText}]`);
+			const stateColor = acc.active ? "success" : acc.cooldown ? "warning" : "accent";
+			const icon = c(stateColor, acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB");
+			const status = c(stateColor, acc.active ? "active" : acc.cooldown ? "cooldown" : "standby");
+			const planText = acc.plan ? `${c("muted", " \u2022 ")}${c("syntaxKeyword", acc.plan)}` : "";
+			const idText = c(acc.active ? "text" : "muted", acc.id);
+			lines.push(`${icon} ${idText} ${c("muted", "[")}${status}${planText}${c("muted", "]")}`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
@@ -497,30 +542,21 @@ export function formatUsageDetails(
 			for (const key of keys) {
 				const percent = acc.windows[key];
 				if (typeof percent !== "number") continue;
-				const safe = normalizePercent(percent) ?? 0;
-				const cells = detailBar(safe);
-				const paddedKey = key.padEnd(9);
-				const paddedPct = `${safe}%`.padStart(4);
-				const reset = acc.resets?.[key];
-				if (typeof reset === "number" && Number.isFinite(reset)) {
-					const rel = resetLabel(reset, now);
-					const abs = vnStamp(reset, now);
-					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
-				} else {
-					lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
-				}
+				lines.push(renderWindowLine(key, percent, acc.resets));
 			}
 		}
 		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 			lines.push("");
-			lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
+			lines.push(`${c("muted", "Updated")} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
 		}
 		return lines.join("\n");
 	}
 
-	const headerPlan = normalized.plan ? ` (${normalized.plan})` : "";
-	const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
-	const lines: string[] = [`Subscription usage \u2014 ${providerId}${headerPlan}${headerModel}`];
+	const headerPlan = normalized.plan ? c("syntaxKeyword", ` (${normalized.plan})`) : "";
+	const headerModel = options.modelId ? `${c("muted", " \u2022 ")}${c("syntaxString", options.modelId)}` : "";
+	const lines: string[] = [
+		`${c("accent", "Subscription usage")} ${c("muted", "\u2014")} ${c("syntaxFunction", providerId)}${headerPlan}${headerModel}`,
+	];
 	const keys = Object.keys(normalized.windows).sort((a, b) => {
 		const order = detailWindowOrder(a) - detailWindowOrder(b);
 		return order !== 0 ? order : a.localeCompare(b);
@@ -528,37 +564,27 @@ export function formatUsageDetails(
 	for (const key of keys) {
 		const percent = normalized.windows[key];
 		if (typeof percent !== "number") continue;
-		const safe = normalizePercent(percent) ?? 0;
-		const cells = detailBar(safe);
-		const paddedKey = key.padEnd(9);
-		const paddedPct = `${safe}%`.padStart(4);
-		const reset = normalized.resets?.[key];
-		if (typeof reset === "number" && Number.isFinite(reset)) {
-			const rel = resetLabel(reset, now);
-			const abs = vnStamp(reset, now);
-			lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${rel} (${abs})`);
-		} else {
-			lines.push(`  \u2022 ${paddedKey} ${paddedPct} ${cells}`);
-		}
+		lines.push(renderWindowLine(key, percent, normalized.resets));
 	}
 	if (typeof normalized.resetsLeft === "number") {
 		const label =
 			normalized.resetsLeft === 1 ? "1 left" : `${normalized.resetsLeft} left`;
-		lines.push(`  \u2022 resets:   ${label}`);
+		const rColor = normalized.resetsLeft > 0 ? "success" : "muted";
+		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "resets:  ")} ${c(rColor, label)}`);
 	}
 	if (normalized.balance) {
-		lines.push(`  \u2022 balance:  ${formatBalance(normalized.balance)}`);
+		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "balance: ")} ${c("success", formatBalance(normalized.balance))}`);
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
 		const tag = peak.isPeak
 			? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
 			: deepSeekOffPeakDetail(peak, now);
-		lines.push(`  \u2022 deepseek: ${tag}`);
-		lines.push(`  \u2022 peak win: ${formatDeepSeekPeakWindows(now)}`);
+		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "deepseek:")} ${c(peak.isPeak ? "warning" : "success", tag)}`);
+		lines.push(`  ${c("accent", "\u2022")} ${c("syntaxType", "peak win:")} ${c("muted", formatDeepSeekPeakWindows(now))}`);
 	}
 	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
-		lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
+		lines.push(`${c("muted", "Updated")} ${c("success", fetchAgeLabel(options.fetchedAt, now))}`);
 	}
 	return lines.join("\n");
 }
@@ -2217,6 +2243,8 @@ export default function (pi: ExtensionAPI) {
 				if (s && safeUi(ctx))
 					arm(activeCfg, ctx, nextDelay(s, Date.now(), current?.id, activeCfg.id));
 			}
+			const uiTheme = safeUi(ctx)?.theme;
+			const hasColor = Boolean(uiTheme && uiTheme.fg("accent", "x") !== "x");
 			const sections: string[] = [];
 			for (const cfg of cfgs) {
 				const state = cache.get(cfg.id);
@@ -2234,10 +2262,13 @@ export default function (pi: ExtensionAPI) {
 					}
 				}
 				const modelId = cfg === activeCfg ? model?.id : undefined;
+				const emptyMsg = state?.lastError ?? "no usage data yet";
 				sections.push(
 					data
-						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now() })
-						: `${cfg.id}: ${state?.lastError ?? "no usage data yet"}`,
+						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now(), theme: uiTheme })
+						: hasColor && uiTheme
+							? `\x1b[22m${uiTheme.fg("muted", cfg.id)}${uiTheme.fg("dim", `: ${emptyMsg}`)}`
+							: `${cfg.id}: ${emptyMsg}`,
 				);
 			}
 			const hiddenHint = mode === "off" ? "\n(Usage hidden — /usage toggle to restore it)" : "";
