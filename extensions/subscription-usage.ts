@@ -608,6 +608,34 @@ export function formatUsageDetails(
 		const leadIcon = isActive ? c("yellow", "⚡") : c(pColor, "◆");
 		const sepPipe = c("surface2", " │ ");
 
+		// Antigravity reports separate gemini-* and 3p-* (Claude/GPT) pools. For the
+		// active model show only its pool; otherwise show both with pool-tagged labels.
+		const poolPrefix = options.modelId
+			? /claude|gpt/i.test(options.modelId) ? "3p-" : "gemini-"
+			: undefined;
+		let poolFiltered = false;
+		const selectPoolKeys = (keys: string[]): string[] => {
+			if (!poolPrefix) return keys;
+			const matched = keys.filter((k) => k.startsWith(poolPrefix));
+			if (matched.length === 0) return keys;
+			poolFiltered = true;
+			return matched;
+		};
+		const windowLabel = (key: string): string => {
+			if (!poolFiltered) {
+				if (key === "gemini-5h") return "G·5h";
+				if (key === "gemini-weekly") return "G·W ";
+				if (key === "3p-5h") return "3P·5h";
+				if (key === "3p-weekly") return "3P·W ";
+			}
+			return shortWindowKey(key);
+		};
+		const poolTag = (): { plain: string; colored: string } => {
+			if (!poolFiltered) return { plain: "", colored: "" };
+			const name = poolPrefix === "3p-" ? "Claude/GPT pool" : "Gemini pool";
+			return { plain: ` • ${name}`, colored: `${c("overlay1", " • ")}${c("teal", name)}` };
+		};
+
 		const renderCompactHeader = (metaPlain: string, metaColored: string): string => {
 			const hasFresh =
 				typeof options.fetchedAt === "number" &&
@@ -637,7 +665,7 @@ export function formatUsageDetails(
 			const shownPct = expired ? 0 : safe;
 			const band: CtpColor = expired ? "overlay1" : ctpBandColor(safe);
 			const cells = detailColoredBar(shownPct, c);
-			const rawKey = shortWindowKey(key);
+			const rawKey = windowLabel(key);
 			const rawPct = `${shownPct}%`.padStart(4);
 			const sKey = c("lavender", rawKey);
 			const sPct = c(band, rawPct);
@@ -654,13 +682,6 @@ export function formatUsageDetails(
 		};
 
 		if (normalized.accounts && normalized.accounts.length > 1) {
-			const metaPlain = ` (${normalized.accounts.length} pooled${options.modelId ? ` • ${options.modelId}` : ""})`;
-			const metaColored =
-				`${c("overlay1", " (")}${c("sky", `${normalized.accounts.length} pooled`)}` +
-				(options.modelId ? `${c("overlay1", " • ")}${c("flamingo", options.modelId)}` : "") +
-				c("overlay1", ")");
-			const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
-
 			const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 				if (a.active !== b.active) return a.active ? -1 : 1;
 				if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
@@ -682,7 +703,7 @@ export function formatUsageDetails(
 					acc.plan === "Ultra" ? "pink" : acc.active ? "green" : acc.cooldown ? "yellow" : "mauve";
 				const badge = `${c("overlay1", "[")}${c(bColor, bRaw)}${c("overlay1", "]")}`;
 
-				const keys = Object.keys(acc.windows).sort((a, b) => {
+				const keys = selectPoolKeys(Object.keys(acc.windows)).sort((a, b) => {
 					const order = detailWindowOrder(a) - detailWindowOrder(b);
 					return order !== 0 ? order : a.localeCompare(b);
 				});
@@ -694,6 +715,15 @@ export function formatUsageDetails(
 				}
 				return { prefix: `  ${icon} ${idText} ${badge}  `, cells };
 			});
+
+			const tag = poolTag();
+			const metaPlain = ` (${normalized.accounts.length} pooled${options.modelId ? ` • ${options.modelId}` : ""}${tag.plain})`;
+			const metaColored =
+				`${c("overlay1", " (")}${c("sky", `${normalized.accounts.length} pooled`)}` +
+				(options.modelId ? `${c("overlay1", " • ")}${c("flamingo", options.modelId)}` : "") +
+				tag.colored +
+				c("overlay1", ")");
+			const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
 
 			const colCount = Math.max(0, ...accountRows.map((r) => r.cells.length));
 			const colWidths = Array.from({ length: colCount }, (_, colIdx) =>
@@ -712,6 +742,10 @@ export function formatUsageDetails(
 		}
 
 		// Single-account compact dashboard block
+		const keys = selectPoolKeys(Object.keys(normalized.windows)).sort((a, b) => {
+			const order = detailWindowOrder(a) - detailWindowOrder(b);
+			return order !== 0 ? order : a.localeCompare(b);
+		});
 		const metaPartsPlain: string[] = [];
 		const metaPartsColored: string[] = [];
 		if (normalized.plan) {
@@ -722,17 +756,14 @@ export function formatUsageDetails(
 			metaPartsPlain.push(options.modelId);
 			metaPartsColored.push(c("flamingo", options.modelId));
 		}
-		const metaPlain = metaPartsPlain.length > 0 ? ` (${metaPartsPlain.join(" • ")})` : "";
+		const singleTag = poolTag();
+		const metaPlain = metaPartsPlain.length > 0 ? ` (${metaPartsPlain.join(" • ")}${singleTag.plain})` : "";
 		const metaColored =
 			metaPartsColored.length > 0
-				? `${c("overlay1", " (")}${metaPartsColored.join(c("overlay1", " • "))}${c("overlay1", ")")}`
+				? `${c("overlay1", " (")}${metaPartsColored.join(c("overlay1", " • "))}${singleTag.colored}${c("overlay1", ")")}`
 				: "";
 		const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
 
-		const keys = Object.keys(normalized.windows).sort((a, b) => {
-			const order = detailWindowOrder(a) - detailWindowOrder(b);
-			return order !== 0 ? order : a.localeCompare(b);
-		});
 		const windowCells: string[] = [];
 		for (const key of keys) {
 			const percent = normalized.windows[key];
@@ -1486,8 +1517,12 @@ export const antigravityCfg: ProviderCfg = {
 		const baseHeaders: Record<string, string> = {
 			"Content-Type": "application/json",
 			Accept: "application/json",
+			// The legacy IDE UA ("antigravity/1.15.8 windows/amd64") gets a quota
+			// summary with only the 3p-* (Claude/GPT) buckets; the CLI UA also
+			// receives the gemini-5h / gemini-weekly buckets.
 			"User-Agent":
-				process.env.ANTIGRAVITY_USER_AGENT || "antigravity/1.15.8 windows/amd64",
+				process.env.ANTIGRAVITY_USER_AGENT ||
+				"antigravity/cli/1.4.2 (aidev_client; os_type=linux; arch=amd64; cl=1001591392; auth_method=consumer)",
 			"X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
 			"Client-Metadata": JSON.stringify({
 				ideType: "ANTIGRAVITY",
