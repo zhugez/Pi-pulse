@@ -323,6 +323,35 @@ function vnStamp(ms: number, now = Date.now()): string {
 	}
 }
 
+/** Fixed 5-char Vietnam timestamp for tabular alignment: `HH:MM` (today) or `MM-DD` (other day). */
+function vnShortStamp(ms: number, now = Date.now()): string {
+	if (!Number.isFinite(ms)) return "??:??";
+	try {
+		const fmt = new Intl.DateTimeFormat("en-CA", {
+			timeZone: "Asia/Ho_Chi_Minh",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			hour12: false,
+		});
+		const parts = fmt.formatToParts(new Date(ms));
+		const nowParts = fmt.formatToParts(new Date(now));
+		const get = (arr: Intl.DateTimeFormatPart[], t: string) =>
+			arr.find((p) => p.type === t)?.value ?? "";
+		const sameDay =
+			get(parts, "year") === get(nowParts, "year") &&
+			get(parts, "month") === get(nowParts, "month") &&
+			get(parts, "day") === get(nowParts, "day");
+		return sameDay
+			? `${get(parts, "hour")}:${get(parts, "minute")}`
+			: `${get(parts, "month")}-${get(parts, "day")}`;
+	} catch {
+		return "??:??";
+	}
+}
+
 // Catppuccin Mocha 24-bit TrueColor palette (https://catppuccin.com/palette/)
 const CTP = {
 	rosewater: "245;224;220", // #f5e0dc
@@ -543,28 +572,13 @@ function detailColoredBar(
 	return `${f}${e}`;
 }
 
-// Nerd Fonts v3 Material Design glyphs (https://www.nerdfonts.com/cheat-sheet)
-const NF_USAGE_ICONS = {
-	gauge: "\u{f04c5}",      // nf-md-speedometer (󰓅)
-	active: "\u{f05e0}",     // nf-md-check_circle (󰗠)
-	cooldown: "\u{f051f}",   // nf-md-timer_sand (󰔟)
-	standby: "\u{f03e6}",    // nf-md-pause_circle_outline (󰏦)
-	clock: "\u{f0150}",      // nf-md-clock_outline (󰅐)
-	refresh: "\u{f0450}",    // nf-md-refresh (󰑐)
-	wallet: "\u{f0bdd}",     // nf-md-wallet_outline (󰯝)
-	google: "\u{f02ad}",     // nf-md-google (󰊭)
-	brain: "\u{f09d1}",      // nf-md-brain (󰧑)
-	robot: "\u{f167a}",      // nf-md-robot_outline (󱙺)
-	fire: "\u{f0238}",       // nf-md-fire (󰈸)
-	network: "\u{f048d}",    // nf-md-server_network (󰒍)
-} as const;
-
-function providerNerdIcon(providerId: string): string {
-	if (providerId.includes("antigravity") || providerId.includes("gemini")) return NF_USAGE_ICONS.google;
-	if (providerId.includes("codex") || providerId.includes("openai")) return NF_USAGE_ICONS.brain;
-	if (providerId.includes("claude")) return NF_USAGE_ICONS.robot;
-	if (providerId.includes("deepseek")) return NF_USAGE_ICONS.fire;
-	return NF_USAGE_ICONS.network;
+function shortWindowKey(key: string): string {
+	if (key === "3p-5h" || key === "gemini-5h" || key === "deepseek-5h" || key === "5h") return "5h";
+	if (key === "3p-weekly" || key === "gemini-weekly" || key === "weekly" || key === "7d") return "W ";
+	if (key === "daily") return "1d";
+	if (key === "monthly") return "1m";
+	if (key === "rolling") return "R ";
+	return key;
 }
 
 export function formatUsageDetails(
@@ -575,45 +589,179 @@ export function formatUsageDetails(
 		fetchedAt?: number;
 		now?: number;
 		theme?: { fg(color: string, text: string): string };
+		active?: boolean;
 	} = {},
 ): string {
 	const now = options.now ?? Date.now();
 	const hasColor = isColorTheme(options.theme);
 	const c = (color: CtpColor, text: string) => (hasColor ? ctp(color, text) : text);
-	const nf = (glyph: string) => (hasColor ? `${glyph} ` : "");
 
 	const normalized = normalizeUsageData(data);
 	if (!normalized) return `${c("overlay1", providerId)}: ${c("surface2", "no usage data")}`;
 
+	// Compact Dashboard View when running in interactive TUI (hasColor === true)
+	if (hasColor) {
+		const pColor = providerCtpColor(providerId);
+		const isActive = Boolean(options.active || options.modelId);
+		const leadIcon = isActive ? c("yellow", "⚡") : c(pColor, "◆");
+		const sepPipe = c("surface2", " │ ");
+
+		const renderCompactHeader = (metaPlain: string, metaColored: string): string => {
+			const hasFresh =
+				typeof options.fetchedAt === "number" &&
+				Number.isFinite(options.fetchedAt) &&
+				options.fetchedAt > 0;
+			const freshPlain = hasFresh ? ` ↻ ${fetchAgeLabel(options.fetchedAt!, now)}` : "";
+			const ageMs = hasFresh ? Math.max(0, now - options.fetchedAt!) : 0;
+			const ageColor: CtpColor =
+				ageMs < 3_600_000 ? "green" : ageMs < 12 * 3_600_000 ? "yellow" : "overlay1";
+			const freshColored = hasFresh ? ` ${c(ageColor, `↻ ${fetchAgeLabel(options.fetchedAt!, now)}`)}` : "";
+			const leftPlainLen = 2 + providerId.length + metaPlain.length;
+			const targetWidth = 78;
+			const ruleLen = Math.max(3, targetWidth - leftPlainLen - freshPlain.length - 1);
+			const rule = ` ${c("surface2", "─".repeat(ruleLen))}`;
+			return `${leadIcon} ${c(pColor, providerId)}${metaColored}${rule}${freshColored}`;
+		};
+
+		const renderCompactCell = (
+			key: string,
+			percent: number,
+			resets: Record<string, number> | undefined,
+		): string => {
+			const safe = normalizePercent(percent) ?? 0;
+			const reset = resets?.[key];
+			const hasReset = typeof reset === "number" && Number.isFinite(reset);
+			const expired = hasReset && reset <= now;
+			const band: CtpColor = expired ? "overlay1" : ctpBandColor(safe);
+			const cells = detailColoredBar(expired ? 0 : safe, c);
+			const sKey = c("lavender", shortWindowKey(key));
+			const sPct = c(band, `${expired ? 0 : safe}%`.padStart(4));
+			if (hasReset) {
+				const rel = expired
+					? c("teal", "done")
+					: c("yellow", resetLabel(reset, now).padEnd(4));
+				const abs = c(expired ? "surface2" : "subtext0", `(${vnShortStamp(reset, now)})`);
+				return `${sKey} ${cells} ${sPct} ${rel} ${abs}`;
+			}
+			return `${sKey} ${cells} ${sPct}`;
+		};
+
+		if (normalized.accounts && normalized.accounts.length > 1) {
+			const metaPlain = ` (${normalized.accounts.length} pooled${options.modelId ? ` • ${options.modelId}` : ""})`;
+			const metaColored =
+				`${c("overlay1", " (")}${c("sky", `${normalized.accounts.length} pooled`)}` +
+				(options.modelId ? `${c("overlay1", " • ")}${c("flamingo", options.modelId)}` : "") +
+				c("overlay1", ")");
+			const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
+
+			const sortedAccounts = [...normalized.accounts].sort((a, b) => {
+				if (a.active !== b.active) return a.active ? -1 : 1;
+				if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
+				return a.id.localeCompare(b.id);
+			});
+
+			const maxIdLen = Math.max(...sortedAccounts.map((a) => a.id.length));
+			const badgeLabel = (a: (typeof sortedAccounts)[number]) =>
+				a.plan ?? (a.active ? "active" : a.cooldown ? "cooldown" : "standby");
+			const maxBadgeLen = Math.max(...sortedAccounts.map((a) => badgeLabel(a).length));
+
+			for (const acc of sortedAccounts) {
+				const stateColor: CtpColor = acc.active ? "green" : acc.cooldown ? "yellow" : "sapphire";
+				const rawIcon = acc.active ? "●" : acc.cooldown ? "⏳" : "○";
+				const icon = c(stateColor, rawIcon);
+				const idText = c(acc.active ? "text" : "subtext0", acc.id.padEnd(maxIdLen));
+				const bRaw = badgeLabel(acc).padEnd(maxBadgeLen);
+				const bColor: CtpColor =
+					acc.plan === "Ultra" ? "pink" : acc.active ? "green" : acc.cooldown ? "yellow" : "mauve";
+				const badge = `${c("overlay1", "[")}${c(bColor, bRaw)}${c("overlay1", "]")}`;
+
+				const keys = Object.keys(acc.windows).sort((a, b) => {
+					const order = detailWindowOrder(a) - detailWindowOrder(b);
+					return order !== 0 ? order : a.localeCompare(b);
+				});
+				const windowCells: string[] = [];
+				for (const key of keys) {
+					const percent = acc.windows[key];
+					if (typeof percent !== "number") continue;
+					windowCells.push(renderCompactCell(key, percent, acc.resets));
+				}
+				lines.push(`  ${icon} ${idText} ${badge}  ${windowCells.join(sepPipe)}`);
+			}
+			return lines.join("\n");
+		}
+
+		// Single-account compact dashboard block
+		const metaPartsPlain: string[] = [];
+		const metaPartsColored: string[] = [];
+		if (normalized.plan) {
+			metaPartsPlain.push(normalized.plan);
+			metaPartsColored.push(c("pink", normalized.plan));
+		}
+		if (options.modelId) {
+			metaPartsPlain.push(options.modelId);
+			metaPartsColored.push(c("flamingo", options.modelId));
+		}
+		const metaPlain = metaPartsPlain.length > 0 ? ` (${metaPartsPlain.join(" • ")})` : "";
+		const metaColored =
+			metaPartsColored.length > 0
+				? `${c("overlay1", " (")}${metaPartsColored.join(c("overlay1", " • "))}${c("overlay1", ")")}`
+				: "";
+		const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
+
+		const keys = Object.keys(normalized.windows).sort((a, b) => {
+			const order = detailWindowOrder(a) - detailWindowOrder(b);
+			return order !== 0 ? order : a.localeCompare(b);
+		});
+		const windowCells: string[] = [];
+		for (const key of keys) {
+			const percent = normalized.windows[key];
+			if (typeof percent !== "number") continue;
+			windowCells.push(`${c("mauve", "•")} ${renderCompactCell(key, percent, normalized.resets)}`);
+		}
+		if (typeof normalized.resetsLeft === "number" && normalized.resetsLeft > 0) {
+			const label = normalized.resetsLeft === 1 ? "1 reset left" : `${normalized.resetsLeft} resets left`;
+			windowCells.push(c("green", `↻ ${label}`));
+		}
+		if (normalized.balance) {
+			windowCells.push(`${c("lavender", "bal")} ${c("green", formatBalance(normalized.balance))}`);
+		}
+		if (windowCells.length > 0) {
+			lines.push(`  ${windowCells.join(sepPipe)}`);
+		}
+		if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
+			const peak = getDeepSeekPeakInfo(now);
+			const tag = peak.isPeak
+				? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
+				: deepSeekOffPeakDetail(peak, now);
+			lines.push(
+				`  ${c("mauve", "•")} ${c("lavender", "deepseek:")} ${c(peak.isPeak ? "peach" : "green", tag)}${sepPipe}${c("subtext0", formatDeepSeekPeakWindows(now))}`,
+			);
+		}
+		return lines.join("\n");
+	}
+
+	// Plain-text format (unit tests & non-color environments)
 	const renderWindowLine = (
 		key: string,
 		percent: number,
 		resets: Record<string, number> | undefined,
 	) => {
 		const safe = normalizePercent(percent) ?? 0;
-		const band = ctpBandColor(safe);
-		const cells = hasColor ? detailColoredBar(safe, c) : detailBar(safe);
-		const paddedKey = c("lavender", key.padEnd(9));
-		const paddedPct = c(band, `${safe}%`.padStart(4));
-		const bullet = c("mauve", "\u2022");
+		const cells = detailBar(safe);
+		const paddedKey = key.padEnd(9);
+		const paddedPct = `${safe}%`.padStart(4);
 		const reset = resets?.[key];
 		if (typeof reset === "number" && Number.isFinite(reset)) {
-			const rel = c("yellow", resetLabel(reset, now));
-			const abs = c("subtext0", `(${vnStamp(reset, now)})`);
-			return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}  ${c("subtext0", `${nf(NF_USAGE_ICONS.clock)}resets`)} ${rel} ${abs}`;
+			return `  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${resetLabel(reset, now)} (${vnStamp(reset, now)})`;
 		}
-		return `  ${bullet} ${paddedKey} ${paddedPct} ${cells}`;
+		return `  \u2022 ${paddedKey} ${paddedPct} ${cells}`;
 	};
 
-	const pIcon = nf(providerNerdIcon(providerId));
-	const pColor = providerCtpColor(providerId);
-	const hIcon = nf(NF_USAGE_ICONS.gauge);
-
 	if (normalized.accounts && normalized.accounts.length > 1) {
-		const poolLabel = c("sky", ` (${normalized.accounts.length} accounts pooled)`);
-		const headerModel = options.modelId ? `${c("overlay1", " \u2022 ")}${c("flamingo", options.modelId)}` : "";
+		const poolLabel = ` (${normalized.accounts.length} accounts pooled)`;
+		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
 		const lines: string[] = [
-			`${c("mauve", `${hIcon}Subscription usage`)} ${c("overlay1", "\u2014")} ${c(pColor, `${pIcon}${providerId}`)}${poolLabel}${headerModel}`,
+			`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`,
 		];
 		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 			if (a.active !== b.active) return a.active ? -1 : 1;
@@ -623,17 +771,10 @@ export function formatUsageDetails(
 
 		for (const acc of sortedAccounts) {
 			lines.push("");
-			const stateColor: CtpColor = acc.active ? "green" : acc.cooldown ? "yellow" : "sapphire";
-			const rawIcon = acc.active
-				? hasColor ? NF_USAGE_ICONS.active : "\u25CF"
-				: acc.cooldown
-					? hasColor ? NF_USAGE_ICONS.cooldown : "\u23F3"
-					: hasColor ? NF_USAGE_ICONS.standby : "\u25CB";
-			const icon = c(stateColor, rawIcon);
-			const status = c(stateColor, acc.active ? "active" : acc.cooldown ? "cooldown" : "standby");
-			const planText = acc.plan ? `${c("overlay1", " \u2022 ")}${c("pink", acc.plan)}` : "";
-			const idText = c(acc.active ? "text" : "subtext0", acc.id);
-			lines.push(`${icon} ${idText} ${c("overlay1", "[")}${status}${planText}${c("overlay1", "]")}`);
+			const icon = acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB";
+			const status = acc.active ? "active" : acc.cooldown ? "cooldown" : "standby";
+			const planText = acc.plan ? ` \u2022 ${acc.plan}` : "";
+			lines.push(`${icon} ${acc.id} [${status}${planText}]`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
@@ -646,15 +787,15 @@ export function formatUsageDetails(
 		}
 		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 			lines.push("");
-			lines.push(`${c("subtext0", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("green", fetchAgeLabel(options.fetchedAt, now))}`);
+			lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
 		}
 		return lines.join("\n");
 	}
 
-	const headerPlan = normalized.plan ? c("pink", ` (${normalized.plan})`) : "";
-	const headerModel = options.modelId ? `${c("overlay1", " \u2022 ")}${c("flamingo", options.modelId)}` : "";
+	const headerPlan = normalized.plan ? ` (${normalized.plan})` : "";
+	const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
 	const lines: string[] = [
-		`${c("mauve", `${hIcon}Subscription usage`)} ${c("overlay1", "\u2014")} ${c(pColor, `${pIcon}${providerId}`)}${headerPlan}${headerModel}`,
+		`Subscription usage \u2014 ${providerId}${headerPlan}${headerModel}`,
 	];
 	const keys = Object.keys(normalized.windows).sort((a, b) => {
 		const order = detailWindowOrder(a) - detailWindowOrder(b);
@@ -668,22 +809,21 @@ export function formatUsageDetails(
 	if (typeof normalized.resetsLeft === "number") {
 		const label =
 			normalized.resetsLeft === 1 ? "1 left" : `${normalized.resetsLeft} left`;
-		const rColor: CtpColor = normalized.resetsLeft > 0 ? "green" : "overlay1";
-		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "resets:  ")} ${c(rColor, label)}`);
+		lines.push(`  \u2022 resets:   ${label}`);
 	}
 	if (normalized.balance) {
-		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "balance: ")} ${c("green", `${nf(NF_USAGE_ICONS.wallet)}${formatBalance(normalized.balance)}`)}`);
+		lines.push(`  \u2022 balance:  ${formatBalance(normalized.balance)}`);
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
 		const tag = peak.isPeak
 			? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
 			: deepSeekOffPeakDetail(peak, now);
-		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "deepseek:")} ${c(peak.isPeak ? "peach" : "green", tag)}`);
-		lines.push(`  ${c("mauve", "\u2022")} ${c("lavender", "peak win:")} ${c("subtext0", formatDeepSeekPeakWindows(now))}`);
+		lines.push(`  \u2022 deepseek: ${tag}`);
+		lines.push(`  \u2022 peak win: ${formatDeepSeekPeakWindows(now)}`);
 	}
 	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
-		lines.push(`${c("subtext0", `${nf(NF_USAGE_ICONS.refresh)}Updated`)} ${c("green", fetchAgeLabel(options.fetchedAt, now))}`);
+		lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
 	}
 	return lines.join("\n");
 }
@@ -2344,30 +2484,70 @@ export default function (pi: ExtensionAPI) {
 			}
 			const uiTheme = safeUi(ctx)?.theme;
 			const hasColor = isColorTheme(uiTheme);
-			const sections: string[] = [];
-			for (const cfg of cfgs) {
-				const state = cache.get(cfg.id);
-				let data = state?.lastData;
-				let fetchedAt = state?.lastFetch;
-				if (!data && cfg.sharedCache !== false) {
-					try {
-						const disk = (await diskCache.read())[cfg.id];
-						if (disk?.data) {
-							data = disk.data;
-							fetchedAt = disk.fetchedAt;
+			let sharedDisk: Record<string, { data?: UsageData; fetchedAt?: number }> | undefined;
+			const resolved = await Promise.all(
+				cfgs.map(async (cfg) => {
+					const state = cache.get(cfg.id);
+					let data = state?.lastData;
+					let fetchedAt = state?.lastFetch;
+					if (!data && cfg.sharedCache !== false) {
+						try {
+							sharedDisk ??= await diskCache.read();
+							const disk = sharedDisk[cfg.id];
+							if (disk?.data) {
+								data = disk.data;
+								fetchedAt = disk.fetchedAt;
+							}
+						} catch {
+							// Disk cache is best-effort; missing data is reported below.
 						}
-					} catch {
-						// Disk cache is best-effort; missing data is reported below.
 					}
-				}
-				const modelId = cfg === activeCfg ? model?.id : undefined;
-				const emptyMsg = state?.lastError ?? "no usage data yet";
-				sections.push(
-					data
-						? formatUsageDetails(data, cfg.id, { modelId, fetchedAt, now: Date.now(), theme: uiTheme })
-						: hasColor
-							? `${ctp("overlay1", `${providerNerdIcon(cfg.id)} ${cfg.id}`)}${ctp("surface2", `: ${emptyMsg}`)}`
+					return { cfg, data, fetchedAt, lastError: state?.lastError };
+				}),
+			);
+
+			// Order: active provider first, then providers with data (freshest first), then empty providers
+			const ordered = [...resolved].sort((a, b) => {
+				const aActive = a.cfg === activeCfg ? 1 : 0;
+				const bActive = b.cfg === activeCfg ? 1 : 0;
+				if (aActive !== bActive) return bActive - aActive;
+				const aHas = a.data ? 1 : 0;
+				const bHas = b.data ? 1 : 0;
+				if (aHas !== bHas) return bHas - aHas;
+				return (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0);
+			});
+
+			const sections: string[] = [];
+			const emptyIds: string[] = [];
+			const now = Date.now();
+			for (const { cfg, data, fetchedAt, lastError } of ordered) {
+				const isActive = cfg === activeCfg;
+				const modelId = isActive ? model?.id : undefined;
+				if (data) {
+					sections.push(
+						formatUsageDetails(data, cfg.id, {
+							modelId,
+							fetchedAt,
+							now,
+							theme: uiTheme,
+							active: isActive,
+						}),
+					);
+				} else if (lastError || !hasColor) {
+					const emptyMsg = lastError ?? "no usage data yet";
+					sections.push(
+						hasColor
+							? `${ctp("red", `⚠ ${cfg.id}`)}${ctp("subtext0", `: ${emptyMsg}`)}`
 							: `${cfg.id}: ${emptyMsg}`,
+					);
+				} else {
+					emptyIds.push(cfg.id);
+				}
+			}
+			if (emptyIds.length > 0) {
+				const dot = ctp("surface2", " · ");
+				sections.push(
+					`${ctp("overlay1", "○ No data:")} ${emptyIds.map((id) => ctp("surface2", id)).join(dot)}`,
 				);
 			}
 			const hiddenHint = mode === "off" ? "\n(Usage hidden — /usage toggle to restore it)" : "";
