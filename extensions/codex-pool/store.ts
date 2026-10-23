@@ -65,7 +65,7 @@ export class AccountStore {
     try {
       file = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       const stat = await file.stat();
-      if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 ||
+      if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
           (process.getuid && stat.uid !== process.getuid())) throw new Error();
       return validate(JSON.parse(await file.readFile("utf8")));
     } catch (error) {
@@ -80,7 +80,7 @@ export class AccountStore {
     validate(data);
     try {
       const stat = await lstat(this.path);
-      if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o777) !== 0o600 ||
+      if (stat.isSymbolicLink() || !stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600) ||
           (process.getuid && stat.uid !== process.getuid())) {
         throw new Error();
       }
