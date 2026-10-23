@@ -105,9 +105,8 @@ export function normalizeUsageData(value: unknown): UsageData | undefined {
 				}),
 			) as Record<string, number>)
 		: {};
-	if (Object.keys(windows).length === 0 && !balance) return undefined;
-
 	const plan = typeof record?.plan === "string" ? record.plan.trim() : undefined;
+	if (Object.keys(windows).length === 0 && !balance && !plan) return undefined;
 	const resets = normalizeResets(record?.resets);
 	const resetsLeft = normalizeResetsLeft(record?.resetsLeft);
 	const accounts = normalizeAccounts(record?.accounts);

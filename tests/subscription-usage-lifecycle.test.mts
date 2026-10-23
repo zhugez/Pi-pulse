@@ -5,8 +5,10 @@ import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@e
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import subscriptionUsage, {
 	antigravityCfg,
+	alpakyrosPoolCfg,
 	claudeCliCfg,
 	codexCfg,
+	codexPoolCfg,
 	deepseekCfg,
 	MissingCredentialError,
 	opencodeCfg,
@@ -40,6 +42,8 @@ function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = [])
 	const providerFetches = {
 		"opencode-go": t.mock.method(opencodeCfg, "fetchUsage", async () => ({ windows: { rolling: 5 } })),
 		"openai-codex": fetch,
+		"alpakyros-pool": t.mock.method(alpakyrosPoolCfg, "fetchUsage", async () => ({ windows: {}, plan: "Key 1 inactive · unlimited" })),
+		"codex-pool": t.mock.method(codexPoolCfg, "fetchUsage", async () => ({ windows: { "account 5h": 20 } })),
 		antigravity: t.mock.method(antigravityCfg, "fetchUsage", async () => ({ windows: { "gemini-5h": 8 } })),
 		"claude-cli": t.mock.method(claudeCliCfg, "fetchUsage", async () => ({ windows: { "5h": 10 } })),
 		deepseek: t.mock.method(deepseekCfg, "fetchUsage", async () => ({ windows: { "deepseek-5h": 3 } })),
@@ -324,7 +328,7 @@ test("/usage refresh all force-fetches every provider explicitly", async (t) => 
 		if (id === "openai-codex") continue;
 		assert.equal(mocked.mock.callCount(), 1, id);
 	}
-	assert.match(notices.at(-1)!, /Usage refreshed for all 5 providers/);
+	assert.match(notices.at(-1)!, /Usage refreshed for all 7 providers/);
 });
 
 test("/usage refresh <provider> refreshes only that provider", async (t) => {

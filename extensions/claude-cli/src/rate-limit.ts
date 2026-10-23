@@ -58,6 +58,19 @@ export function buildRateLimitPayload(
  * flicker. Comparing everything EXCEPT the timestamp is what makes the push
  * "on change" rather than "on turn".
  */
+/** Human-readable footer text; pi's footer renders status strings verbatim. */
+export function formatRateLimit(p: RateLimitPayload): string {
+  const parts = [`claude ${String(p.rateLimitType ?? "5h")}: ${String(p.status ?? "?")}`];
+  if (p.utilization !== null) parts.push(`${Math.round(p.utilization * 100)}%`);
+  if (typeof p.resetsAt === "number") {
+    const ms = p.resetsAt < 10_000_000_000 ? p.resetsAt * 1000 : p.resetsAt;
+    const d = new Date(ms);
+    parts.push(`reset ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`);
+  }
+  if (p.isUsingOverage) parts.push("overage");
+  return parts.join(" · ");
+}
+
 export function rateLimitIdentity(payload: RateLimitPayload): string {
   const { observedAt: _observedAt, ...rest } = payload;
   return JSON.stringify(rest);

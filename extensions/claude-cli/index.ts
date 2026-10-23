@@ -27,7 +27,7 @@ import { cleanupRuntimeDir } from "./src/runtime-dir.js";
 import { retireAllCliProcesses } from "./src/cli-process.js";
 import { cliThinkingLevelMap } from "./src/thinking-config.js";
 import { rewriteOverflowMessage } from "./src/overflow.js";
-import { buildRateLimitPayload, rateLimitIdentity } from "./src/rate-limit.js";
+import { buildRateLimitPayload, formatRateLimit, rateLimitIdentity } from "./src/rate-limit.js";
 import type { TaskTrackerState } from "./src/types.js";
 import { usesPiContext } from "./src/context-policy.js";
 import { piContext } from "./src/pi-context.js";
@@ -74,7 +74,7 @@ function publishRateLimit(info: Record<string, unknown>): void {
         setStatus.call(
           uiContext!.ui,
           RATE_LIMIT_STATUS_KEY,
-          JSON.stringify(payload),
+          formatRateLimit(payload),
         );
       } catch {}
     }
@@ -82,9 +82,12 @@ function publishRateLimit(info: Record<string, unknown>): void {
 
   // Sync rate limit to subscription-usage-cache.json for /usage command
   try {
+    // The event often omits utilization; writing 0% would mask real usage.
+    if (typeof info.utilization !== "number") return;
     const rawType = String(info.rateLimitType || "5h");
-    const windowKey = rawType === "7d" ? "7d" : rawType;
-    const pct = typeof info.utilization === "number" ? Math.round(info.utilization * 100) : 0;
+    const windowKey =
+      ({ five_hour: "5h", seven_day: "7d", seven_day_opus: "opus", seven_day_sonnet: "sonnet" } as Record<string, string>)[rawType] ?? rawType;
+    const pct = Math.round(info.utilization * 100);
     const resetSec = typeof info.resetsAt === "number" ? info.resetsAt : undefined;
     const resetMs = resetSec ? (resetSec < 10_000_000_000 ? resetSec * 1000 : resetSec) : undefined;
 

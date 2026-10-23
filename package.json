@@ -44,6 +44,7 @@
       "./extensions/lens/index.ts",
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",
+      "./extensions/alpakyros-pool/index.ts",
       "./extensions/antigravity/index.ts",
       "./extensions/gemini-web/index.ts",
       "./extensions/antigravity/features/google-search.ts",

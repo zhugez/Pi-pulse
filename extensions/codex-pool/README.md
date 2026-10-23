@@ -28,6 +28,18 @@ Native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro subscriptions) b
 - `/codex-pool.accounts switch <id>`: Sets the preferred account by ID prefix (unambiguous prefix required).
 - `/codex-pool.accounts remove <id>`: Removes an account from the pool by ID prefix. If the preferred account is removed, the next remaining account becomes preferred.
 
+## Usage
+
+`/usage` includes `codex-pool`; `/usage refresh codex-pool` refreshes quota windows
+for each account, labeled with its 12-character account ID. Percentages are per
+account, not a pooled average. The active pool provider also shows these windows
+in the usage widget.
+
+Polling reads the private account store without rotating tokens. Login-required
+and expired accounts are skipped; use the pool to refresh credentials or sign in
+again. HTTP failures are reported rather than shown as zero usage. Pool usage is
+not persisted to the shared usage cache.
+
 ## Model Selection
 
 After adding accounts, select any Codex model under the `codex-pool` provider in `/model`:

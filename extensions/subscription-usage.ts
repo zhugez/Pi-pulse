@@ -42,7 +42,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AccountStore } from "./codex-pool/store.ts";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
@@ -1320,18 +1321,7 @@ export const codexCfg: ProviderCfg = {
 			(cred && cred.type === "oauth" ? cred.access : undefined);
 		if (!access) throw new MissingCredentialError("no OAuth token for openai-codex");
 
-		const res = await fetch("https://chatgpt.com/backend-api/codex/usage", {
-			headers: {
-				Authorization: `Bearer ${access}`,
-				"User-Agent":
-					"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-				Accept: "application/json",
-			},
-			signal: anySignal(signal, AbortSignal.timeout(10_000)),
-		});
-		if (!res.ok) throw await usageHttpError(res, "openai-codex", [access]);
-		const json = (await res.json()) as CodexUsageResponse;
-		return parseCodexUsage(json);
+		return fetchCodexUsage(access, signal);
 	},
 	render(data, theme, _modelId, style = "bars") {
 		const w = data.windows;
@@ -1361,6 +1351,92 @@ export const codexCfg: ProviderCfg = {
 
 		if (parts.length === 0) return "";
 		return joinParts(parts, theme);
+	},
+};
+
+async function fetchCodexUsage(access: string, signal?: AbortSignal, accountId?: string): Promise<UsageData> {
+	const res = await fetch("https://chatgpt.com/backend-api/codex/usage", {
+		headers: {
+			Authorization: `Bearer ${access}`,
+			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+			Accept: "application/json",
+			...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+		},
+		signal: anySignal(signal, AbortSignal.timeout(10_000)),
+	});
+	if (!res.ok) throw await usageHttpError(res, "openai-codex", [access]);
+	return parseCodexUsage(await res.json() as CodexUsageResponse);
+}
+
+export const codexPoolCfg: ProviderCfg = {
+	id: "codex-pool",
+	sharedCache: false,
+	async fetchUsage(signal) {
+		const store = new AccountStore(path.join(getAgentDir(), "codex-accounts.json"));
+		const { accounts } = await store.read(signal);
+		// Usage polling is read-only: token rotation remains owned by the pool.
+		const usable = accounts.filter((account) => !account.needsLogin && account.credential.expires > Date.now());
+		if (!usable.length) throw new MissingCredentialError("no unexpired accounts for codex-pool; sign in or use the pool to refresh credentials");
+		const windows: Record<string, number> = {};
+		const resets: Record<string, number> = {};
+		for (const account of usable) {
+			const data = await fetchCodexUsage(account.credential.access, signal,
+				typeof account.credential.accountId === "string" ? account.credential.accountId : undefined);
+			for (const [key, percent] of Object.entries(data.windows)) {
+				const label = `${account.id.slice(0, 12)} ${key}`;
+				windows[label] = percent;
+				if (data.resets?.[key] !== undefined) resets[label] = data.resets[key];
+			}
+		}
+		return { windows, resets, plan: `codex-pool (${usable.length}/${accounts.length} accounts)` };
+	},
+	render: codexCfg.render,
+};
+
+export const alpakyrosPoolCfg: ProviderCfg = {
+	id: "alpakyros-pool",
+	sharedCache: false,
+	async fetchUsage(signal) {
+		let config: { baseUrl: string; keys: string[] };
+		try {
+			config = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "alpakyros-pool.json"), "utf8"));
+		} catch { throw new MissingCredentialError("no private configuration for alpakyros-pool"); }
+		let url: URL;
+		try { url = new URL(config.baseUrl); }
+		catch { throw new MissingCredentialError("invalid private configuration for alpakyros-pool"); }
+		if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
+			!Array.isArray(config.keys) || !config.keys.length ||
+			config.keys.some((key) => typeof key !== "string" || !key.trim())) {
+			throw new MissingCredentialError("invalid private configuration for alpakyros-pool");
+		}
+		url.pathname = "/api/v1/keys/status";
+		const windows: Record<string, number> = {};
+		const states: string[] = [];
+		for (const [index, key] of [...new Set(config.keys)].entries()) {
+			const res = await fetch(url, {
+				method: "POST", redirect: "error",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				body: JSON.stringify({ key }),
+				signal: anySignal(signal, AbortSignal.timeout(10_000)),
+			});
+			if (!res.ok) throw new Error(`alpakyros-pool status HTTP ${res.status}`);
+			let data: Record<string, unknown> | undefined;
+			try { data = asRecord(await res.json()); }
+			catch { throw new Error("alpakyros-pool returned invalid status data"); }
+			const state = data?.state;
+			if (typeof state !== "string" || !/^[a-z_-]{1,32}$/.test(state)) {
+				throw new Error("alpakyros-pool returned no key state");
+			}
+			const label = `Key ${index + 1} ${state}`;
+			states.push(`${label}${data?.is_unlimited === true ? " · unlimited" : ""}`);
+			const remaining = normalizePercent(asRecord(data?.key_quota)?.remaining_percentage);
+			if (remaining !== undefined && data?.is_unlimited !== true) windows[label] = 100 - remaining;
+		}
+		return { windows, plan: states.join("; ") };
+	},
+	render(data, theme, modelId, style) {
+		return joinParts([theme.fg("dim", data.plan ?? "Alpakyros Pool"),
+			codexCfg.render(data, theme, modelId, style)].filter(Boolean), theme);
 	},
 };
 
@@ -1770,16 +1846,44 @@ export const antigravityCfg: ProviderCfg = {
 /** Claude Code CLI: rate limit windows (5h, 7d/weekly) captured from CLI execution. */
 export const claudeCliCfg: ProviderCfg = {
 	id: "claude-cli",
-	async fetchUsage() {
+	async fetchUsage(signal) {
 		let plan: string | undefined;
+		let token: string | undefined;
 		try {
 			const credPath = path.join(os.homedir(), ".claude", ".credentials.json");
-			const creds = JSON.parse(await fs.promises.readFile(credPath, "utf8"));
-			if (creds?.claudeAiOauth?.subscriptionType) {
-				plan = String(creds.claudeAiOauth.subscriptionType);
+			const oauth = JSON.parse(await fs.promises.readFile(credPath, "utf8"))?.claudeAiOauth;
+			if (oauth?.subscriptionType) plan = String(oauth.subscriptionType);
+			// The CLI owns refresh; an expired token just falls back to the cache.
+			if (typeof oauth?.accessToken === "string" && !(oauth.expiresAt < Date.now())) {
+				token = oauth.accessToken;
 			}
 		} catch {
 			// credentials not on disk or unreadable
+		}
+
+		// Same endpoint Claude Code's own /usage reads; utilization is 0-100.
+		if (token) {
+			const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+				headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
+				signal,
+			});
+			if (!res.ok) throw await usageHttpError(res, "claude-cli", [token]);
+			const json = asRecord(await res.json());
+			const windows: Record<string, number> = {};
+			const resets: Record<string, number> = {};
+			for (const [src, key] of [
+				["five_hour", "5h"],
+				["seven_day", "7d"],
+				["seven_day_opus", "opus"],
+				["seven_day_sonnet", "sonnet"],
+			] as const) {
+				const win = asRecord(json?.[src]);
+				if (typeof win?.utilization !== "number") continue;
+				windows[key] = Math.round(win.utilization);
+				const at = typeof win.resets_at === "string" ? Date.parse(win.resets_at) : NaN;
+				if (Number.isFinite(at)) resets[key] = at;
+			}
+			return { windows, resets, plan };
 		}
 
 		const cached = (await diskCache.read())["claude-cli"]?.data;
@@ -1806,7 +1910,8 @@ export const claudeCliCfg: ProviderCfg = {
 		for (const [k, label] of [
 			["5h", "5h"],
 			["7d", "7d"],
-			["weekly", "W"],
+			["opus", "opus"],
+			["sonnet", "sonnet"],
 		] as const) {
 			const val = w[k];
 			if (typeof val === "number") {
@@ -1825,6 +1930,8 @@ export const claudeCliCfg: ProviderCfg = {
 export const usageProviderCfgs: readonly ProviderCfg[] = [
 	opencodeCfg,
 	codexCfg,
+	codexPoolCfg,
+	alpakyrosPoolCfg,
 	antigravityCfg,
 	claudeCliCfg,
 	deepseekCfg,

@@ -305,6 +305,12 @@ export function buildPrompt(context: {
     return result;
   }
 
+  // A lone user message has no history to label; a bare "USER:" prefix
+  // makes the model echo transcript markers back ("USER:hiASSISTANT:").
+  if (context.messages.length === 1 && context.messages[0].role === "user") {
+    return userContentToText(context.messages[0].content);
+  }
+
   // No images in final user message: standard text-only path
   const parts: string[] = [];
 
