@@ -60,6 +60,24 @@ test("partial content suppresses replay and secrets are never returned in errors
   assert.doesNotMatch(result.errorMessage!, /secret-key/);
 });
 
+test("default delegate uses the pool endpoint and key", async () => {
+  const requests: string[] = [];
+  const pool = createPoolStream([{ key: "pool-test-key" }]);
+  const result = await pool({ ...model, baseUrl: "https://pool.example.invalid/v1",
+    reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 1024,
+  }, context, {
+    fetch: async (input, init) => {
+      requests.push(String(input));
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer pool-test-key");
+      return new Response(JSON.stringify({ error: { message: "test error" } }), {
+        status: 400, headers: { "content-type": "application/json" },
+      });
+    },
+  }).result();
+  assert.deepEqual(requests, ["https://pool.example.invalid/v1/chat/completions"]);
+  assert.equal(result.stopReason, "error");
+});
+
 test("cancellation makes no request", async () => {
   const controller = new AbortController();
   controller.abort();

@@ -2,13 +2,13 @@ import { constants, openSync, fstatSync, readFileSync, closeSync } from "node:fs
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage, type Model, type Provider, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
-import { streamSimple as nativeStream } from "@earendil-works/pi-ai/api/openai-completions";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 interface Account { key: string; cooldownUntil?: number; disabled?: boolean }
 interface Config { baseUrl: string; keys: string[]; models: Model<"openai-completions">[] }
 const ID = "alpakyros-pool";
 
-export function createPoolStream(accounts: Account[], delegate = nativeStream) {
+export function createPoolStream(accounts: Account[], delegate = builtinProviders().find((provider) => provider.id === "deepseek")!.streamSimple) {
   // ponytail: cooldowns and sticky account are process-local; persist only if cross-session coordination is needed.
   let preferred = 0;
   return (model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions) => {
