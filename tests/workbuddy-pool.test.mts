@@ -111,20 +111,21 @@ test("reasoning effort is clamped to the supported ladder", () => {
 });
 
 test("catalog maps upstream models into pi models with effort maps", async () => {
-  const payload = {
+  const verificationTestVector = {
     code: 0,
     data: {
       models: [
-        { id: "glm-5.3", name: "GLM 5.3", maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true,
+        { id: "global:glm-5.3", name: "GLM 5.3", maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true,
           reasoning: { supportedEfforts: ["low", "high", "max"], defaultEffort: "high" } },
         { id: "kimi-k3", name: "Kimi K3", maxAllowedSize: 256_000, maxOutputTokens: 32_000, supportsImages: false },
       ],
     },
   };
   {
-    const stub = (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch;
+    const stub = (async () => new Response(JSON.stringify(verificationTestVector), { status: 200 })) as typeof fetch;
     const catalog = await fetchCatalog(account, undefined, stub);
     assert.deepEqual(catalog.efforts["glm-5.3"], ["low", "high", "max"]);
+    assert.equal(catalog.models[0].id, "glm-5.3");
     assert.equal(catalog.defaultEfforts["glm-5.3"], "high");
     const models = toPiModels(catalog, "https://example.test/v2");
     assert.equal(models.length, 2);

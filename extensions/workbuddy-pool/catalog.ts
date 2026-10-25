@@ -67,12 +67,17 @@ function nonChatModel(id: string, maxOutputTokens?: number, tags?: string[]): bo
   return (tags ?? []).some((tag) => ["text-to-image", "image-to-image", "text-to-video", "image-to-video"].includes(tag));
 }
 
+function canonicalModelId(id: string): string {
+  return id.replace(/^(?:global|cn):/i, "");
+}
+
 function rawToModelInfo(item: RawModel): WbModelInfo {
+  const id = canonicalModelId(item.id!);
   const supported = (item.reasoning?.supportedEfforts ?? []).map((value) => value.toLowerCase());
   const defaultEffort = (item.reasoning?.defaultEffort ?? item.reasoning?.effort)?.toLowerCase();
   return {
-    id: item.id!,
-    name: item.name || item.id!,
+    id,
+    name: item.name || id,
     description: item.descriptionEn || item.descriptionZh,
     contextWindow: item.maxInputTokens ?? item.maxAllowedSize ?? 200_000,
     maxTokens: item.maxOutputTokens ?? 32_000,
@@ -142,7 +147,7 @@ export async function fetchCatalog(account: WbAccount, signal?: AbortSignal, fet
     const v3Models = await fetchV3Config(account, signal, fetchImpl);
     const known = new Set(models.map((model) => model.id));
     for (const item of v3Models) {
-      if (known.has(item.id!)) continue;
+      if (known.has(canonicalModelId(item.id!))) continue;
       add(item);
     }
   } catch (error) {
@@ -190,7 +195,13 @@ const CACHE_FILE = () => join(getAgentDir(), "workbuddy-models.json");
 export function loadCachedCatalog(): WbCatalog | undefined {
   try {
     const parsed = JSON.parse(readFileSync(CACHE_FILE(), "utf8")) as WbCatalog;
-    return Array.isArray(parsed.models) && parsed.models.length > 0 ? parsed : undefined;
+    if (!Array.isArray(parsed.models) || parsed.models.length === 0) return undefined;
+    const models = parsed.models.map((model) => ({ ...model, id: canonicalModelId(model.id) }));
+    const efforts: Record<string, string[]> = {};
+    for (const [id, values] of Object.entries(parsed.efforts ?? {})) efforts[canonicalModelId(id)] = values;
+    const defaultEfforts: Record<string, string> = {};
+    for (const [id, value] of Object.entries(parsed.defaultEfforts ?? {})) defaultEfforts[canonicalModelId(id)] = value;
+    return { models, efforts, defaultEfforts };
   } catch {
     return undefined;
   }
