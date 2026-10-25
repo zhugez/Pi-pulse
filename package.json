@@ -36,7 +36,9 @@
   "scripts": {
     "test": "bash scripts/test.sh",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run typecheck && pnpm test"
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm test"
   },
   "pi": {
     "extensions": [
@@ -69,6 +71,8 @@
     "@earendil-works/pi-coding-agent": "^0.86.1",
     "@earendil-works/pi-tui": "^0.87.1",
     "@types/cross-spawn": "^6.0.6",
+    "oxfmt": "^0.74.0",
+    "oxlint": "^1.89.0",
     "typescript": "^7.0.2"
   },
   "dependencies": {
