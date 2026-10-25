@@ -137,6 +137,7 @@ let shared: FetchFunction | undefined;
 
 /** Process-wide client: one resolver instance, reused by every WorkBuddy call. */
 export function wbFetch(): FetchFunction {
+  if (process.platform === "win32") return globalThis.fetch as FetchFunction;
   shared ??= createNodeFetch();
   return shared;
 }
