@@ -1,4 +1,4 @@
-import { stream as openaiStream, streamSimple as openaiStreamSimple } from "@earendil-works/pi-ai/api/openai-completions";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { FetchFunction, Model, OAuthCredential, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { loginWorkBuddy, refreshAccount } from "./auth.ts";
 import { PROVIDER_ID, PROVIDER_NAME, fetchCatalog, toPiModels, type WbCatalog } from "./catalog.ts";
@@ -30,11 +30,12 @@ export function createWorkBuddyProvider(options: WorkBuddyProviderOptions): Prov
 
   const models = (): Model<"openai-completions">[] => toPiModels(catalog() ?? { models: [], efforts: {}, defaultEfforts: {} }, BASE_URL);
 
-  const stream = (model: Model<"openai-completions">, context: Parameters<typeof openaiStream>[1], streamOptions: Parameters<typeof openaiStream>[2], simple = false) => {
+  const api = openAICompletionsApi();
+  const stream = (model: Model<"openai-completions">, context: Parameters<typeof api.stream>[1], streamOptions: Parameters<typeof api.stream>[2], simple = false) => {
     const merged = { ...streamOptions, fetch: fetchImpl, maxRetries: 0, apiKey: "workbuddy-managed" } as SimpleStreamOptions;
     return simple
-      ? openaiStreamSimple(model, context, merged)
-      : openaiStream(model, context, merged);
+      ? api.streamSimple(model, context, merged)
+      : api.stream(model, context, merged);
   };
 
   return {
