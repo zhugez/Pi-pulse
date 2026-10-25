@@ -1,5 +1,5 @@
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { FetchFunction, Model, OAuthCredential, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { loginWorkBuddy, refreshAccount } from "./auth.ts";
 import { PROVIDER_ID, PROVIDER_NAME, fetchCatalog, toPiModels, type WbCatalog } from "./catalog.ts";
 import type { AccountStore, WbAccount } from "./store.ts";
@@ -30,12 +30,13 @@ export function createWorkBuddyProvider(options: WorkBuddyProviderOptions): Prov
 
   const models = (): Model<"openai-completions">[] => toPiModels(catalog() ?? { models: [], efforts: {}, defaultEfforts: {} }, BASE_URL);
 
-  const api = openAICompletionsApi();
-  const stream = (model: Model<"openai-completions">, context: Parameters<typeof api.stream>[1], streamOptions: Parameters<typeof api.stream>[2], simple = false) => {
+  const delegate = builtinProviders().find((provider) => provider.id === "deepseek");
+  if (!delegate) throw new Error("WorkBuddy requires the built-in OpenAI-compatible stream provider");
+  const stream = (model: Model<"openai-completions">, context: Parameters<NonNullable<typeof delegate.stream>>[1], streamOptions: Parameters<NonNullable<typeof delegate.stream>>[2], simple = false) => {
     const merged = { ...streamOptions, fetch: fetchImpl, maxRetries: 0, apiKey: "workbuddy-managed" } as SimpleStreamOptions;
     return simple
-      ? api.streamSimple(model, context, merged)
-      : api.stream(model, context, merged);
+      ? delegate.streamSimple(model, context, merged)
+      : delegate.stream(model, context, merged);
   };
 
   return {
