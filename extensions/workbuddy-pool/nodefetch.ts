@@ -134,10 +134,22 @@ export function createNodeFetch(options: NodeFetchOptions = {}): FetchFunction {
 }
 
 let shared: FetchFunction | undefined;
+let windowsFallback: FetchFunction | undefined;
 
 /** Process-wide client: one resolver instance, reused by every WorkBuddy call. */
 export function wbFetch(): FetchFunction {
-  if (process.platform === "win32") return globalThis.fetch as FetchFunction;
-  shared ??= createNodeFetch();
-  return shared;
+  if (process.platform !== "win32") {
+    shared ??= createNodeFetch();
+    return shared;
+  }
+  windowsFallback ??= createNodeFetch();
+  const nativeFetch = windowsFallback;
+  return (async (input, init) => {
+    try {
+      return await globalThis.fetch(input, init);
+    } catch (error) {
+      if (init?.signal?.aborted) throw error;
+      return nativeFetch(input, init);
+    }
+  }) as FetchFunction;
 }
