@@ -222,6 +222,7 @@ function staticModel(id: string, name: string, contextWindow: number, maxTokens:
 /** Snapshot of the upstream CLI catalog, used only before the first successful fetch. */
 export const STATIC_CATALOG: WbCatalog = (() => {
   const models = [
+    staticModel("deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 1_000_000, 128_000, ["low", "high", "max"]),
     staticModel("default-model", "Auto", 176_000, 24_000),
     staticModel("fast-model", "Fast", 176_000, 24_000),
     staticModel("balanced-model", "Balanced", 176_000, 24_000),

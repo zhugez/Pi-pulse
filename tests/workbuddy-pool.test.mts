@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fetchCatalog, toPiModels } from "../extensions/workbuddy-pool/catalog.ts";
+import { fetchCatalog, STATIC_CATALOG, toPiModels } from "../extensions/workbuddy-pool/catalog.ts";
 import {
   cleanupOrphanToolCalls,
   mergeAdjacentToolCalls,
@@ -134,6 +134,11 @@ test("catalog maps upstream models into pi models with effort maps", async () =>
     assert.equal(models[1].contextWindow, 256_000);
     assert.equal(models[1].reasoning, false);
   }
+});
+
+test("static catalog starts with a directly callable DeepSeek model", () => {
+  assert.equal(STATIC_CATALOG.models[0].id, "deepseek-v4.1-flash");
+  assert.deepEqual(STATIC_CATALOG.efforts["deepseek-v4.1-flash"], ["low", "high", "max"]);
 });
 
 test("panel auth files import into the account store", async () => {
