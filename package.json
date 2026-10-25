@@ -36,9 +36,11 @@
   "scripts": {
     "test": "bash scripts/test.sh",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint .",
+    "lint": "oxlint --import-plugin .",
+    "lint:type-aware": "oxlint --type-aware --type-check --import-plugin .",
     "format": "oxfmt .",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm test"
+    "format:check": "oxfmt --check .",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run lint:type-aware && pnpm test"
   },
   "pi": {
     "extensions": [
@@ -73,6 +75,7 @@
     "@types/cross-spawn": "^6.0.6",
     "oxfmt": "^0.74.0",
     "oxlint": "^1.89.0",
+    "oxlint-tsgolint": "^7.0.2005",
     "typescript": "^7.0.2"
   },
   "dependencies": {
