@@ -9,6 +9,7 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
 - **Loop guard** — blocks byte-identical tool calls before they grind, with an actionable reason instead of a silent repeat.
+- **CRAP gate** — `/crap` scores every function with [unclebob/crapper](https://github.com/unclebob/crapper) and reports the ones over CRAP 10.
 - **Comment checker** — runs `@code-yeongyu/comment-checker` after `write`/`edit`/`multiedit`/`apply_patch` and appends its warnings to the tool result.
 - **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
 - **Code Mode (`code_exec`)** — programmatically orchestrate file reads, shell commands, and data processing in an async sandbox without context bloat.
@@ -32,6 +33,22 @@ A model that repeats the same call with identical arguments is not making progre
 - **Signature**: canonicalized JSON (key order cannot hide a repeat), hashed with SHA-256.
 - **Never blocks nested calls** (`ctx.executeTool` / codemode subcalls), which cannot re-plan mid-script.
 - **Toggle**: `PI_LOOP_GUARD=0`.
+
+### CRAP gate (`/crap`)
+
+The numeric half of [ub-mode](https://github.com/unclebob/ub-mode): `CRAP = CC² × (1 − coverage)³ + CC`, and every function should stay under **10**. Because CRAP is never lower than CC, the gate also rejects any function whose cyclomatic complexity is above 10 — even fully covered.
+
+```bash
+/crap                  # complexity only, fast: --no-coverage
+/crap --changed        # git additions and edits, with coverage
+/crap src/core         # a path or path fragment
+/crap --threshold 30   # exit 2 when the worst score exceeds 30
+```
+
+- **A command, not a tool.** A coverage run takes minutes and the first invocation bootstraps a Python venv, so this never sits in the per-edit path.
+- **Discovery**: `PI_CRAPPER`, then `crapper` on `PATH`, then the project's own `./crapper` launcher.
+- **Bounded**: 64 KiB output, 300 s timeout. Exit 2 (threshold exceeded) is reported as a result, not an error.
+- **Fails open**: no binary → a warning with the install hint, never a blocked edit.
 
 ### Comment checker
 
