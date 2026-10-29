@@ -4,5 +4,7 @@ node_modules/
 .DS_Store
 Thumbs.db
 .pi/
-# crapper / mutator snapshots
+# crapper / mutator artifacts
 .metrics/
+target/mutation-workers/
+target/mutator-backup/
