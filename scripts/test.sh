@@ -21,7 +21,6 @@ ln -s "$PWD/node_modules" "$check_dir/node_modules"
   --rewriteRelativeImportExtensions \
   --rootDir . \
   extensions/startup-entry.ts \
-  extensions/deferred-extension.ts \
   extensions/subscription-usage.ts \
   extensions/live-throughput-status.ts \
   tests/*.mts

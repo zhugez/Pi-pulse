@@ -1,19 +1,21 @@
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const BUNDLED_TSC = fileURLToPath(new URL("../../node_modules/.bin/tsc", import.meta.url));
-const TSC_BIN = existsSync(BUNDLED_TSC) ? BUNDLED_TSC : "tsc";
+import { runProcess } from '../gates/process.ts';
+
+const BUNDLED_TSC = fileURLToPath(new URL('../../node_modules/.bin/tsc', import.meta.url));
+const TSC_BIN = existsSync(BUNDLED_TSC) ? BUNDLED_TSC : 'tsc';
 
 export interface DiagnosticFinding {
   file: string;
   line: number;
   column?: number;
-  severity: "error" | "warning";
+  severity: 'error' | 'warning';
   message: string;
 }
 
@@ -22,7 +24,7 @@ const DIAGNOSTIC_CACHE_LIMIT = 128;
 const diagnosticCache = new Map<string, DiagnosticFinding[]>();
 
 function contentHash(filePath: string, content: string): string {
-  return createHash("sha256").update(filePath).update("\0").update(content).digest("hex");
+  return createHash('sha256').update(filePath).update('\0').update(content).digest('hex');
 }
 
 /** Check Python syntax using child process with explicit stdin piping & timeout */
@@ -39,38 +41,42 @@ except Exception as e:
     sys.exit(1)
 `;
 
-    const child = spawn("python3", ["-c", pythonScript, filePath], { timeout: timeoutMs });
+    const child = spawn('python3', ['-c', pythonScript, filePath], { timeout: timeoutMs });
 
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => {
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
-    child.on("error", (err) => {
-      resolve([{
-        file: filePath,
-        line: 1,
-        severity: "error",
-        message: `Python diagnostics process error: ${err.message}`,
-      }]);
+    child.on('error', (err) => {
+      resolve([
+        {
+          file: filePath,
+          line: 1,
+          severity: 'error',
+          message: `Python diagnostics process error: ${err.message}`,
+        },
+      ]);
     });
 
-    child.on("close", (code) => {
+    child.on('close', (code) => {
       if (code === 0) {
         resolve([]);
         return;
       }
       const lineMatch = /,\s*line\s+(\d+)/i.exec(stderr) ?? /line\s+(\d+)/i.exec(stderr);
       const line = lineMatch ? Number.parseInt(lineMatch[1], 10) : 1;
-      resolve([{
-        file: filePath,
-        line,
-        severity: "error",
-        message: `Python syntax error: ${stderr.trim() || `exited with code ${code}`}`,
-      }]);
+      resolve([
+        {
+          file: filePath,
+          line,
+          severity: 'error',
+          message: `Python syntax error: ${stderr.trim() || `exited with code ${code}`}`,
+        },
+      ]);
     });
 
-    child.stdin.on("error", () => {});
+    child.stdin.on('error', () => {});
     // Explicitly write source and close stdin to prevent hangs
     child.stdin.write(content);
     child.stdin.end();
@@ -79,52 +85,42 @@ except Exception as e:
 
 /** Check TypeScript / JavaScript / TSX syntax using tsc syntactic diagnostics (TS1xxx errors) */
 async function checkTsJsSyntax(content: string, filePath: string, timeoutMs = 8000): Promise<DiagnosticFinding[]> {
-  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
-  const tmpDir = await mkdtemp(join(tmpdir(), "lens-ts-"));
+  const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
+  const tmpDir = await mkdtemp(join(tmpdir(), 'lens-ts-'));
   const tmpFile = join(tmpDir, `check${ext}`);
-  await writeFile(tmpFile, content, "utf8");
+  await writeFile(tmpFile, content, 'utf8');
 
   try {
-    const findings: DiagnosticFinding[] = await new Promise((resolve) => {
-      const args = ["--noEmit", "--ignoreConfig", "--allowJs", "--noLib", "--noResolve"];
-      if (ext === ".tsx" || ext === ".jsx") {
-        args.push("--jsx", "preserve");
-      }
-      args.push(tmpFile);
+    const args = ['--noEmit', '--ignoreConfig', '--allowJs', '--noLib', '--noResolve'];
+    if (ext === '.tsx' || ext === '.jsx') {
+      args.push('--jsx', 'preserve');
+    }
+    args.push(tmpFile);
 
-      const child = spawn(TSC_BIN, args, { timeout: timeoutMs });
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-      child.on("error", () => resolve([])); // Fallback gracefully if tsc not on PATH
-      child.on("close", () => {
-        const output = stdout + "\n" + stderr;
-        const lines = output.split(/\r?\n/);
-        const results: DiagnosticFinding[] = [];
-
-        for (const rawLine of lines) {
-          // Match TypeScript error format: path(line,col): error TSxxxx: message
-          const match = /\((\d+),(\d+)\):\s*error\s*(TS1\d{3}):\s*(.+)/.exec(rawLine);
-          if (match) {
-            const line = Number.parseInt(match[1], 10);
-            const column = Number.parseInt(match[2], 10);
-            const code = match[3];
-            const msg = match[4];
-            results.push({
-              file: filePath,
-              line,
-              column,
-              severity: "error",
-              message: `Syntax error [${code}]: ${msg}`,
-            });
-          }
-        }
-        resolve(results);
-      });
+    // tsc exits 1 for syntax errors (a result) and 2 for fatal errors; a missing
+    // binary or a timeout degrades to "no findings", as before.
+    const result = await runProcess({
+      binary: TSC_BIN,
+      args,
+      cwd: tmpDir,
+      timeoutMs,
+      okExitCodes: [0, 1, 2],
     });
+    if (result.status !== 'ok') return [];
+
+    const findings: DiagnosticFinding[] = [];
+    for (const rawLine of `${result.stdout}\n${result.stderr}`.split(/\r?\n/)) {
+      // Match TypeScript error format: path(line,col): error TSxxxx: message
+      const match = /\((\d+),(\d+)\):\s*error\s*(TS1\d{3}):\s*(.+)/.exec(rawLine);
+      if (!match) continue;
+      findings.push({
+        file: filePath,
+        line: Number.parseInt(match[1]!, 10),
+        column: Number.parseInt(match[2]!, 10),
+        severity: 'error',
+        message: `Syntax error [${match[3]}]: ${match[4]}`,
+      });
+    }
 
     return findings;
   } finally {
@@ -132,10 +128,7 @@ async function checkTsJsSyntax(content: string, filePath: string, timeoutMs = 80
   }
 }
 
-export async function checkFileDiagnostics(
-  filePath: string,
-  content: string,
-): Promise<DiagnosticFinding[]> {
+export async function checkFileDiagnostics(filePath: string, content: string): Promise<DiagnosticFinding[]> {
   const hash = contentHash(filePath, content);
   const cached = diagnosticCache.get(hash);
   if (cached !== undefined) {
@@ -145,10 +138,10 @@ export async function checkFileDiagnostics(
     return cached;
   }
 
-  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
   let findings: DiagnosticFinding[] = [];
 
-  if (ext === ".json") {
+  if (ext === '.json') {
     try {
       JSON.parse(content);
     } catch (err: unknown) {
@@ -158,22 +151,22 @@ export async function checkFileDiagnostics(
         file: filePath,
         line: match ? Number.parseInt(match[1], 10) : 1,
         column: match ? Number.parseInt(match[2], 10) : 1,
-        severity: "error",
+        severity: 'error',
         message: `JSON syntax error: ${msg}`,
       });
     }
   } else if (
-    ext === ".ts" ||
-    ext === ".tsx" ||
-    ext === ".mts" ||
-    ext === ".cts" ||
-    ext === ".js" ||
-    ext === ".jsx" ||
-    ext === ".mjs" ||
-    ext === ".cjs"
+    ext === '.ts' ||
+    ext === '.tsx' ||
+    ext === '.mts' ||
+    ext === '.cts' ||
+    ext === '.js' ||
+    ext === '.jsx' ||
+    ext === '.mjs' ||
+    ext === '.cjs'
   ) {
     findings = await checkTsJsSyntax(content, filePath);
-  } else if (ext === ".py") {
+  } else if (ext === '.py') {
     findings = await checkPythonSyntax(content, filePath);
   }
 
@@ -188,9 +181,7 @@ export async function checkFileDiagnostics(
 }
 
 export function formatDiagnostics(findings: DiagnosticFinding[]): string {
-  if (findings.length === 0) return "";
-  const lines = findings.map(
-    (f) => `  Line ${f.line}${f.column ? `:${f.column}` : ""}: [${f.severity}] ${f.message}`,
-  );
-  return `[code-lens] Diagnostics found issues in ${findings[0].file}:\n${lines.join("\n")}`;
+  if (findings.length === 0) return '';
+  const lines = findings.map((f) => `  Line ${f.line}${f.column ? `:${f.column}` : ''}: [${f.severity}] ${f.message}`);
+  return `[code-lens] Diagnostics found issues in ${findings[0].file}:\n${lines.join('\n')}`;
 }
