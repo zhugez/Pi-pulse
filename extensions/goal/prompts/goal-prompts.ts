@@ -187,7 +187,7 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 function lifecyclePolicyBlock(autonomous: boolean, strict: boolean, commands?: GoalCommands): string {
  return commandInstructions([
   "[OUTCOMES]",
-  '- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
+  '- Automatic runs default to unlimited. maxAutonomousRuns in .pi/goal-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
   ...(autonomous && strict ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
   ...(autonomous && !strict ? ['- Continue pursuing the goal automatically after each execution; no scheduling declaration is required. New waits require user opt-in to strictExecutionContract; do not enable it merely to continue.'] : []),
   '- update_goal({status: "complete"}) only when every requirement is satisfied; the independent completion auditor checks actual evidence. Approval archives; rejection requires rework.',

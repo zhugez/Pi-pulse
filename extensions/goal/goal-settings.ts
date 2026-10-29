@@ -7,8 +7,12 @@
  *
  * Files:
  *
- *     global:  ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-goal-x-settings.json
- *     project: <cwd>/.pi/pi-goal-x-settings.json
+ *     global:  ${PI_CODING_AGENT_DIR:-~/.pi/agent}/goal-settings.json
+ *     project: <cwd>/.pi/goal-settings.json
+ *
+ * The pre-rename file name (pi-goal-x-settings.json) is still read when the
+ * new file is absent, so existing installs keep their settings; the next save
+ * writes the new name and the legacy file is simply ignored.
  *
  * Overrides: PI_GOAL_GLOBAL_SETTINGS_FILE, PI_GOAL_SETTINGS_FILE, and the
  * per-setting PI_GOAL_* variables.
@@ -29,6 +33,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { renameAtomicSync } from "./storage/atomic-rename.ts";
 import { GOAL_COMMANDS, GOAL_KEY_ACTIONS, PAUSE_ORDERS, parseCommandPaths, parseGoalKeybinding, type GoalCommands, type GoalKeybinding, type PauseOrder } from "./goal-controls.ts";
+
+export const GOAL_SETTINGS_FILE_NAME = "goal-settings.json";
+/** Read-only fallback for installs created before the file was renamed. */
+export const LEGACY_GOAL_SETTINGS_FILE_NAME = "pi-goal-x-settings.json";
 
 export const GOAL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof GOAL_THINKING_LEVELS[number];
@@ -234,26 +242,35 @@ export function resolveAgentDir(env: NodeJS.ProcessEnv = process.env, homeDir: s
 
 /**
  * Global settings path: PI_GOAL_GLOBAL_SETTINGS_FILE if set (absolute or
- * relative to homeDir), else <agentDir>/pi-goal-x-settings.json.
+ * relative to homeDir), else <agentDir>/goal-settings.json.
  */
 export function goalGlobalSettingsPath(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
 	const override = asNonEmptyString(env[PI_GOAL_GLOBAL_SETTINGS_FILE_ENV]);
 	if (override) {
 		return path.isAbsolute(override) ? path.normalize(override) : path.resolve(homeDir, override);
 	}
-	return path.join(resolveAgentDir(env, homeDir), "pi-goal-x-settings.json");
+	return path.join(resolveAgentDir(env, homeDir), GOAL_SETTINGS_FILE_NAME);
 }
 
 /**
  * Project settings path: PI_GOAL_SETTINGS_FILE if set (absolute or relative
- * to cwd), else <cwd>/.pi/pi-goal-x-settings.json.
+ * to cwd), else <cwd>/.pi/goal-settings.json.
  */
 export function goalSettingsPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
 	const override = asNonEmptyString(env[PI_GOAL_SETTINGS_FILE_ENV]);
 	if (override) {
 		return path.isAbsolute(override) ? override : path.join(cwd, override);
 	}
-	return path.join(cwd, ".pi", "pi-goal-x-settings.json");
+	return path.join(cwd, ".pi", GOAL_SETTINGS_FILE_NAME);
+}
+
+/**
+ * Pre-rename settings file next to `target`, or null when the path is an
+ * explicit override (env) or is not the canonical settings name.
+ */
+function legacySettingsPathFor(target: string): string | null {
+	if (path.basename(target) !== GOAL_SETTINGS_FILE_NAME) return null;
+	return path.join(path.dirname(target), LEGACY_GOAL_SETTINGS_FILE_NAME);
 }
 
 // ── diagnostics ─────────────────────────────────────────────────────────────
@@ -593,7 +610,7 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	const unknown = diagnostics
 		.filter((d) => d.code === "unknown_key" && d.settingPath && !d.settingPath.includes("."))
 		.map((d) => d.settingPath!);
-	if (unknown.length > 0) throw new Error(`Unknown pi-goal-x-settings.json key(s): ${unknown.join(", ")}`);
+	if (unknown.length > 0) throw new Error(`Unknown ${GOAL_SETTINGS_FILE_NAME} key(s): ${unknown.join(", ")}`);
 	return layer as GoalSettings;
 }
 
@@ -620,6 +637,12 @@ function readSettingsLayerFresh(target: string, scope: SettingsScope): SettingsL
 	try {
 		rawText = fs.readFileSync(target, "utf8");
 	} catch {
+		const legacy = legacySettingsPathFor(target);
+		if (legacy && fs.existsSync(legacy)) {
+			const read = readSettingsLayerFresh(legacy, scope);
+			settingsFileCache.set(target, { read });
+			return read;
+		}
 		const read: SettingsLayerRead = {
 			scope,
 			path: target,
