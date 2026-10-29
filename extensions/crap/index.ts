@@ -1,8 +1,6 @@
-import { execFile } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
-import { join } from 'node:path';
-
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
+
+import { resolveExecutable, runProcess } from '../gates/process.ts';
 
 // CRAP gate (unclebob/ub-mode): CRAP = CC² × (1 − coverage)³ + CC.
 // A command, not a tool: a coverage run takes minutes and the first invocation
@@ -17,7 +15,6 @@ import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-c
 /** ub-mode's gate: every function under CRAP 10. */
 export const CRAP_THRESHOLD = 10;
 export const DEFAULT_TIMEOUT_MS = 300_000;
-export const MAX_OUTPUT_BYTES = 64 * 1024;
 export const DEFAULT_TOP_ROWS = 15;
 
 export type CrapRow = {
@@ -62,70 +59,30 @@ export function parseCrapRows(stdout: string): CrapRow[] {
   return rows;
 }
 
-function isExecutable(path: string): boolean {
-  try {
-    accessSync(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Discovery order: `PI_CRAPPER`, then `crapper` on PATH, then the repo's own
- * `./crapper` launcher in the working directory (crapper self-bootstraps a venv).
- */
+/** `PI_CRAPPER`, then `crapper` on PATH, then the project's own `./crapper` launcher. */
 export function resolveCrapper(
   cwd: string,
   env: Record<string, string | undefined> = process.env,
-  isRunnable: (path: string) => boolean = (path) => existsSync(path) && isExecutable(path),
+  isRunnable?: (path: string) => boolean,
 ): string | undefined {
-  const override = env.PI_CRAPPER;
-  if (override && isRunnable(override)) return override;
-
-  for (const dir of (env.PATH ?? '').split(':')) {
-    if (!dir) continue;
-    const candidate = join(dir, 'crapper');
-    if (isRunnable(candidate)) return candidate;
-  }
-
-  const local = join(cwd, 'crapper');
-  if (isRunnable(local)) return local;
-  return undefined;
+  return resolveExecutable('crapper', cwd, env, isRunnable);
 }
 
-export function runCrapper(options: {
+export async function runCrapper(options: {
   binary: string;
   args: string[];
   cwd: string;
   timeoutMs?: number;
 }): Promise<CrapRunResult> {
   const { binary, args, cwd, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
-  return new Promise((resolve) => {
-    execFile(
-      binary,
-      args,
-      { cwd, timeout: timeoutMs, maxBuffer: MAX_OUTPUT_BYTES, encoding: 'utf8' },
-      (error, stdout, stderr) => {
-        const report = `${stdout ?? ''}${stderr ?? ''}`.trim();
-        if (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code === 'ENOENT') {
-            resolve({ status: 'missing', rows: [], report, message: `crapper not found at ${binary}` });
-            return;
-          }
-          // crapper exits 2 when --threshold is exceeded: that is a result, not a failure.
-          if ((error as { code?: number }).code === 2) {
-            resolve({ status: 'ok', rows: parseCrapRows(stdout ?? ''), report });
-            return;
-          }
-          resolve({ status: 'error', rows: parseCrapRows(stdout ?? ''), report, message: error.message });
-          return;
-        }
-        resolve({ status: 'ok', rows: parseCrapRows(stdout ?? ''), report });
-      },
-    );
-  });
+  // Exit 2 means --threshold was exceeded: a result, not a failure.
+  const result = await runProcess({ binary, args, cwd, timeoutMs, okExitCodes: [0, 2] });
+  return {
+    status: result.status,
+    rows: parseCrapRows(result.stdout),
+    report: `${result.stdout}${result.stderr}`.trim(),
+    message: result.message,
+  };
 }
 
 function formatCrapHeader(rows: CrapRow[], threshold: number): string {

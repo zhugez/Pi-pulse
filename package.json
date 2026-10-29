@@ -48,6 +48,7 @@
       "./extensions/loop-guard/index.ts",
       "./extensions/comment-checker/index.ts",
       "./extensions/crap/index.ts",
+      "./extensions/mutator/index.ts",
       "./extensions/lens/index.ts",
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",

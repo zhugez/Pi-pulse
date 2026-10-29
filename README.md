@@ -9,6 +9,7 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
 - **Loop guard** — blocks byte-identical tool calls before they grind, with an actionable reason instead of a silent repeat.
+- **Mutation gate** — `/mutator` finds behavior no test checks, via [unclebob/mutator](https://github.com/unclebob/mutator).
 - **CRAP gate** — `/crap` scores every function with [unclebob/crapper](https://github.com/unclebob/crapper) and reports the ones over CRAP 10.
 - **Comment checker** — runs `@code-yeongyu/comment-checker` after `write`/`edit`/`multiedit`/`apply_patch` and appends its warnings to the tool result.
 - **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
@@ -50,7 +51,23 @@ The numeric half of [ub-mode](https://github.com/unclebob/ub-mode): `CRAP = CC²
 - **Bounded**: 64 KiB output, 300 s timeout. Exit 2 (threshold exceeded) is reported as a result, not an error.
 - **Fails open**: no binary → a warning with the install hint, never a blocked edit.
 
-### Comment checker
+### Mutation gate (`/mutator`)
+
+The other half of [ub-mode](https://github.com/unclebob/ub-mode): a mutant survives when the tests still pass, so survivors are exactly the behavior nothing checks. Runs [unclebob/mutator](https://github.com/unclebob/mutator), which needs `crapper` checked out next to it (it reads namespaces from `../crapper`).
+
+```bash
+/mutator                      # --changed: git additions and edits
+/mutator --scan src/core      # list mutation sites, run no tests (instant)
+/mutator src/core             # one file or directory
+/mutator --test-command "pnpm test" src/core
+```
+
+- **Slower than `/crap` by an order of magnitude** — each mutant re-runs the tests. Start with one file or `--scan`.
+- **Differential after the first run**: mutator keeps `.metrics/mutate/`, so later runs only re-run survivors and functions whose text changed.
+- **Exit codes are results**: `0` all killed, `2` baseline tests failed, `3` a mutant survived. Only other codes are errors.
+- **Bounded**: 64 KiB output, 15 min default (`PI_MUTATOR_TIMEOUT_MS`), discovery via `PI_MUTATOR` → `PATH` → `./mutator`.
+
+### CRAP gate (`/crap`)
 
 Port of [`pi-comment-checker`](https://github.com/code-yeongyu/pi-comment-checker) (MIT, see `NOTICE`). After a file edit it feeds the change to the native `@code-yeongyu/comment-checker` tree-sitter binary and appends the verdict to the tool result, so redundant comments get flagged in the same turn they are written.
 
