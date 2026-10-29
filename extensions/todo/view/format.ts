@@ -15,16 +15,16 @@ export { formatStatusLabel };
 // ---------------------------------------------------------------------------
 
 export const STATUS_GLYPH: Record<TaskStatus, string> = {
-	pending: "○",
-	in_progress: "◐",
-	completed: "●",
-	deleted: "⊘",
+	pending: "",
+	in_progress: "",
+	completed: "",
+	deleted: "",
 };
 
 /**
  * Color palette for the renderResult status echo. `deleted` uses `muted` so a
  * successful delete is visually distinct from the error branch (which uses
- * `error` + `✗`).
+ * `error` + `X`).
  */
 export const STATUS_COLOR: Record<TaskStatus, "dim" | "warning" | "success" | "muted"> = {
 	pending: "dim",
@@ -34,34 +34,33 @@ export const STATUS_COLOR: Record<TaskStatus, "dim" | "warning" | "success" | "m
 };
 
 /**
- * Per-action prefix glyph for renderCall. `+` create, `→` update, `×` delete,
- * `›` get, `☰` list, `∅` clear.
+ * Per-action prefix glyph for renderCall (Nerd Font): plus create, pen update,
+ * trash delete, search get, list list, broom clear.
  */
 export const ACTION_GLYPH: Record<TaskAction, string> = {
-	create: "+",
-	update: "→",
-	delete: "×",
-	get: "›",
-	list: "☰",
-	clear: "∅",
+	create: "",
+	update: "",
+	delete: "",
+	get: "",
+	list: "",
+	clear: "",
 };
 
 /**
- * Glyph for the persistent overlay's per-task row. Differs from `STATUS_GLYPH`
- * for `completed` (`✓` vs `●`) and `deleted` (`✗` vs `⊘`) because the
- * overlay caller never renders a `deleted` row but uses `✗` in its
- * error-toned palette.
+ * Glyph for the persistent overlay's per-task row. Uses the same block family
+ * as the goal dashboard (check complete, dot-circle current, minus skipped,
+ * circle-o pending), with a times glyph in the error palette for `deleted`.
  */
 export function overlayStatusGlyph(status: TaskStatus, theme: Theme): string {
 	switch (status) {
 		case "pending":
-			return theme.fg("dim", "○");
+			return theme.fg("dim", "");
 		case "in_progress":
-			return theme.fg("warning", "◐");
+			return theme.fg("warning", "");
 		case "completed":
-			return theme.fg("success", "✓");
+			return theme.fg("success", "");
 		case "deleted":
-			return theme.fg("error", "✗");
+			return theme.fg("error", "");
 	}
 }
 
@@ -133,18 +132,18 @@ export function renderTodoCall(
 }
 
 /**
- * `renderResult` body. A failed call renders `✗` with its reason; a successful
- * `create`/`update`/`delete` echoes the task's status; anything else is `✓`.
+ * `renderResult` body. A failed call renders `X` with its reason; a successful
+ * `create`/`update`/`delete` echoes the task's status; anything else is a check.
  */
 export function renderTodoResult(result: ToolResultView, theme: Theme, isError = false): Text {
 	const failure = failureReason(result, isError);
-	if (failure !== undefined) return new Text(theme.fg("error", failure ? `✗ ${failure}` : "✗"), 0, 0);
+	if (failure !== undefined) return new Text(theme.fg("error", failure ? ` ${failure}` : ""), 0, 0);
 
 	const status = echoedStatus(result.details as TaskDetails | undefined);
 	if (status) {
 		return new Text(theme.fg(STATUS_COLOR[status], `${STATUS_GLYPH[status]} ${formatStatusLabel(status)}`), 0, 0);
 	}
-	return new Text(theme.fg("success", "✓"), 0, 0);
+	return new Text(theme.fg("success", ""), 0, 0);
 }
 
 type ToolResultView = { content?: Array<{ type: string; text?: string }>; details?: unknown };

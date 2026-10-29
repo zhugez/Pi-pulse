@@ -139,15 +139,15 @@ export function registerTodosCommand(pi: ExtensionAPI): void {
 			const lines: string[] = [header.join(" · ")];
 			if (groups.pending.length > 0) {
 				lines.push(t("command.section.pending", SECTION_PENDING));
-				for (const task of groups.pending) lines.push(formatCommandTaskLine(task, "○"));
+				for (const task of groups.pending) lines.push(formatCommandTaskLine(task, ""));
 			}
 			if (groups.inProgress.length > 0) {
 				lines.push(t("command.section.in_progress", SECTION_IN_PROGRESS));
-				for (const task of groups.inProgress) lines.push(formatCommandTaskLine(task, "◐"));
+				for (const task of groups.inProgress) lines.push(formatCommandTaskLine(task, ""));
 			}
 			if (groups.completed.length > 0) {
 				lines.push(t("command.section.completed", SECTION_COMPLETED));
-				for (const task of groups.completed) lines.push(formatCommandTaskLine(task, "✓"));
+				for (const task of groups.completed) lines.push(formatCommandTaskLine(task, ""));
 			}
 
 			ctx.ui.notify(lines.join("\n"), "info");

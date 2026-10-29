@@ -75,8 +75,8 @@ export async function showTaskListOverlay(
 					}
 
 					// Goal header
-					const icon = goal.status === "paused" ? "⏸"
-						: goal.sisyphus ? "◆" : "●";
+					const icon = goal.status === "paused" ? ""
+						: goal.sisyphus ? "" : "";
 					const title = displayObjectiveTitle(goal.objective);
 					const label = statusLabel(goal);
 					entries.push({ type: "goal-header", icon, title, status: label });
@@ -116,7 +116,7 @@ export async function showTaskListOverlay(
 						return [dim("·")];
 
 					case "goal-header": {
-						const icon = entry.icon === "⏸" ? muted("⏸") : entry.icon === "◆" ? accent("◆") : accent("●");
+						const icon = entry.icon === "" ? muted("") : accent(entry.icon);
 						const status = dim(entry.status);
 						const prefix = `${icon}  ${bold("")}`; // placeholder, we'll build below
 						const rawPrefix = `${entry.icon}  `; // raw width: icon + 2 spaces
@@ -245,7 +245,7 @@ export async function showTaskListOverlay(
 					const canScrollDown = scrollOffset < maxOffset;
 
 					if (canScrollUp) {
-						out.push(line(p + dim(`▴  ${scrollOffset}/${renderedLineCount} lines`)));
+						out.push(line(p + dim(`  ${scrollOffset}/${renderedLineCount} lines`)));
 					}
 
 					const end = Math.min(scrollOffset + visibleHeight, renderedLineCount);
@@ -260,7 +260,7 @@ export async function showTaskListOverlay(
 					}
 
 					if (canScrollDown) {
-						out.push(line(p + dim(`▾  ${renderedLineCount - end} more lines`)));
+						out.push(line(p + dim(`  ${renderedLineCount - end} more lines`)));
 					}
 
 					if (renderedLineCount === 0) {
@@ -383,7 +383,7 @@ export async function showTaskListOverlay(
 
 // ── Tree entry collection ─────────────────────────────────────────────
 
-const STATUS_ICONS = { complete: "█", skipped: "▒", pending: "░" } as const;
+const STATUS_ICONS = { complete: "", skipped: "", pending: "" } as const;
 const BRANCH = "├─";
 const BRANCH_LAST = "└─";
 

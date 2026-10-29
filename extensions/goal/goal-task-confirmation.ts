@@ -121,7 +121,7 @@ async function showTaskListConfirmationDialog(ctx: ExtensionContext, proposalTex
 					// ── Options ─────────────────────────────────────────────
 					OPTIONS.forEach((opt, i) => {
 						const isSelected = i === selectedIndex;
-						const marker = isSelected ? "▸ " : "  ";
+						const marker = isSelected ? " " : "  ";
 						const label = isSelected ? theme.fg("accent", opt.label) : opt.label;
 						lines.push(line(p + marker + truncateToWidth(label, innerWidth - 6, "…")));
 						if (isSelected) {

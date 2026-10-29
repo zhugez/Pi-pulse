@@ -312,7 +312,7 @@ export function formatGoalBudget(budget: number | undefined): string {
 
 export function buildGoalCreatedReport(args: GoalCreatedReportArgs): string {
 	const opening = args.confirmed
-		? ["✓ Goal created and focused.", "Continuing automatically with the confirmed plan."]
+		? [" Goal created and focused.", "Continuing automatically with the confirmed plan."]
 		: ["Goal confirmed and created."];
 	const lines = [...opening, "", "Finalized goal:", "", args.objective.trim()];
 	const details: string[] = [];

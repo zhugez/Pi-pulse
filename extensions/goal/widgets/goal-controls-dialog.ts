@@ -274,7 +274,7 @@ export class GoalControlsDialog implements Component {
 				const active = start + index === selected;
 				const label = truncateToWidth(row.label, labelWidth, "…");
 				const value = this.display(row, this.setting(row));
-				const content = row.kind === "reset" ? `${active ? "›" : " "} ${row.label}` : `${active ? "›" : " "} ${label}${" ".repeat(Math.max(1, labelWidth - visibleWidth(label) + 1))}${value}`;
+				const content = row.kind === "reset" ? `${active ? "" : " "} ${row.label}` : `${active ? "" : " "} ${label}${" ".repeat(Math.max(1, labelWidth - visibleWidth(label) + 1))}${value}`;
 				lines.push(active ? accent(fit(content)) : fit(content));
 			}
 			if (!rows.length) lines.push(dim("No matching controls."));
@@ -286,7 +286,7 @@ export class GoalControlsDialog implements Component {
 			help.push(this.row!.help);
 			if (this.view === "actions") {
 				lines.push(dim(`${this.actionIndex + 1}/${this.options().length} · Current: ${this.display(this.row!, this.setting(this.row!))}`));
-				this.options().forEach((option, i) => lines.push(i === this.actionIndex ? accent(`› ${option}`) : `  ${option}`));
+				this.options().forEach((option, i) => lines.push(i === this.actionIndex ? accent(` ${option}`) : `  ${option}`));
 				help.splice(0, help.length, this.optionHelp());
 			} else if (this.view === "input") {
 				lines.push(dim(this.row!.kind === "commands" ? "Command paths, separated by commas:" : "Pi key names, separated by commas:"));

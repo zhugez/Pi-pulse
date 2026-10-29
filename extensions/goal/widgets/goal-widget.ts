@@ -420,7 +420,7 @@ export class GoalWidgetComponent implements Component {
 
 		// Divider
 		lines.push(t.fg("dim", "─".repeat(safeWidth)));
-		lines.push(t.fg("warning", "⊙ [DEBUG MODE]"));
+		lines.push(t.fg("warning", "[DEBUG MODE]"));
 		lines.push("");
 
 		const goal = this.getGoal();

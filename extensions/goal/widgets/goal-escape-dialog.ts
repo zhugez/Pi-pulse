@@ -88,7 +88,7 @@ export async function showEscapeDialog(
 					// ── Options ─────────────────────────────────────────────
 					OPTIONS.forEach((opt, i) => {
 						const isSelected = i === selectedIndex && !cancelled;
-						const marker = isSelected ? "▸ " : "  ";
+						const marker = isSelected ? " " : "  ";
 						const label = isSelected ? warning(opt.label) : opt.label;
 						const truncLabel = truncateToWidth(label, innerWidth - 6, "…");
 						lines.push(line(p + marker + truncLabel));

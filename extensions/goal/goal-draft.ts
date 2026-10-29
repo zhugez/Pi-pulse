@@ -58,7 +58,7 @@ export function buildDraftConfirmationText(args: {
 	autoContinue: boolean;
 }): string {
 	const lines: string[] = [];
-	lines.push("● Goal draft ready for confirmation.");
+	lines.push(" Goal draft ready for confirmation.");
 	lines.push("");
 	lines.push("─── Draft Details ───");
 	lines.push(`│   Mode: ${formatModeLabel(args.focus === "sisyphus")}`);
@@ -76,7 +76,7 @@ export function buildTweakConfirmationText(args: {
 	tasks?: GoalTask[];
 }): string {
 	const lines: string[] = [];
-	lines.push("● Goal tweak ready for confirmation.");
+	lines.push(" Goal tweak ready for confirmation.");
 	lines.push("");
 	lines.push("─── Draft Details ───");
 	lines.push(`│   Mode: ${formatModeLabel(args.sisyphus)}`);

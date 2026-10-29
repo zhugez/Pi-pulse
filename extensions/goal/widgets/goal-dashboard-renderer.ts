@@ -102,7 +102,7 @@ function boxSectionRule(theme: Theme, width: number, label: string, right = ""):
 
 function boxFooter(theme: Theme, width: number, content: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
-	// Optional right slot mirrors boxHeader's right-meta treatment (` ● ─`
+	// Optional right slot mirrors boxHeader's right-meta treatment (` · ─`
 	// before the corner), so the auditor dot sits at the bottom-right of the
 	// border. The dot survives; the hint (left content) truncates when tight.
 	const r = right ? ` ${right} ${frame(theme, H)}` : "";
@@ -214,20 +214,21 @@ function amber(theme: Theme, value: string): string {
 // ── task tree rows (§9.2) ───────────────────────────────────────────────────
 
 /** Task rows use the dashboard's own block vocabulary (same family as the
- * `[██░]` progress bars, no dingbats): pending ░, skipped ▒, complete █, and
- * the current task ▓ in accent teal; row text is pastel amber. */
+ * `[██░]` progress bars): pending circle-o, skipped minus, complete check, and
+ * the current task dot-circle in accent teal (Nerd Font glyphs); row text is
+ * pastel amber. */
 function taskMarker(node: DashboardTaskNode): { symbol: string; color: RenderColor } {
-	if (node.isCurrent) return { symbol: "▓", color: "accent" };
-	if (node.status === "complete") return { symbol: "█", color: "success" };
-	if (node.status === "skipped") return { symbol: "▒", color: "muted" };
-	return { symbol: "░", color: "mdHeading" };
+	if (node.isCurrent) return { symbol: "", color: "accent" };
+	if (node.status === "complete") return { symbol: "", color: "success" };
+	if (node.status === "skipped") return { symbol: "", color: "muted" };
+	return { symbol: "", color: "mdHeading" };
 }
 
 function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, available: number): string {
 	const marker = taskMarker(node);
 	const indentText = "  ".repeat(indent);
 	const prefix = `${indentText}${marker.symbol} ${node.id}  `;
-	const contractMark = node.verificationContract ? dim(theme, " ☑") : "";
+	const contractMark = node.verificationContract ? dim(theme, " ") : "";
 	const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
 	const title = fit(node.title, titleBudget);
 	const markerText = theme.fg(marker.color, marker.symbol);
@@ -256,11 +257,11 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 	const idWidth = shown.length === 0 ? 0 : Math.min(10, Math.max(...shown.map((node) => node.id.length)));
 	for (const node of shown) {
 		const marker = taskMarker(node);
-		const contractMark = node.verificationContract ? dim(theme, " ☑") : "";
+		const contractMark = node.verificationContract ? dim(theme, " ") : "";
 		// §9.3 compact subtask marker: direct-child done/total for tasks that
 		// have subtasks, muted so it stays annotation — the current-task bar
 		// below carries the visual weight.
-		const subtaskMark = node.totalSubtasks > 0 ? muted(theme, ` ▸ ${node.completedSubtasks}/${node.totalSubtasks}`) : "";
+		const subtaskMark = node.totalSubtasks > 0 ? muted(theme, `  ${node.completedSubtasks}/${node.totalSubtasks}`) : "";
 		const id = node.id.padEnd(idWidth);
 		const prefix = `${marker.symbol} ${id}  `;
 		const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark) - visibleWidth(subtaskMark));
@@ -280,10 +281,10 @@ function renderCompactTaskRows(theme: Theme, nodes: DashboardTaskNode[], viewpor
 // ── activity rows ───────────────────────────────────────────────────────────
 
 function activityMarker(item: GoalActivityItem): { symbol: string; color: RenderColor } {
-	if (item.marker === "done") return { symbol: "█", color: "success" };
-	if (item.marker === "current") return { symbol: "▓", color: "accent" };
-	if (item.marker === "skipped") return { symbol: "▒", color: "mdHeading" };
-	return { symbol: "░", color: "muted" };
+	if (item.marker === "done") return { symbol: "", color: "success" };
+	if (item.marker === "current") return { symbol: "", color: "accent" };
+	if (item.marker === "skipped") return { symbol: "", color: "mdHeading" };
+	return { symbol: "", color: "muted" };
 }
 
 // ── COMPACT DASHBOARD (§4.1) ────────────────────────────────────────────────
@@ -308,7 +309,7 @@ export function renderCompactDashboard(
 
 	// Status line.
 	if (model.status.code === "complete") {
-		lines.push(boxLine(theme, safeWidth, `${success(theme, "█")} ${success(theme, "All required work is complete.")}`));
+		lines.push(boxLine(theme, safeWidth, `${success(theme, "")} ${success(theme, "All required work is complete.")}`));
 	} else {
 		lines.push(boxLine(theme, safeWidth, model.idlePacing ? fit(model.idlePacing, inner) : statusLine(theme, model)));
 	}
@@ -319,7 +320,7 @@ export function renderCompactDashboard(
 	// exhausted, then soft red.
 	if (model.budget) {
 		const fuel = model.budget.used >= model.budget.total ? "error" : "mdHeading";
-		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
+		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
 
 	// §auditor-toggle: the focused goal's independent-auditor status is the
@@ -341,7 +342,7 @@ export function renderCompactDashboard(
 	if (topLevel.length > 0) {
 		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, compactRows);
 		const viewport = deriveTaskListViewport(topLevel.length, compactRows, offset);
-		// §9.1/§9.3 header row: counts first (`█N done · M open`, skipped
+		// §9.1/§9.3 header row: counts first (`check N done · M open`, skipped
 		// counts as done), compact task progress bar, then the current task's
 		// subtask progress bar beside it (` · Sub done/total `, wide/medium;
 		// narrow drops the word `Sub` so the full counts fit at 50 cols;
@@ -350,7 +351,7 @@ export function renderCompactDashboard(
 		// frame-tone block. The standalone compact progress lines were removed
 		// in favor of this row.
 		const headerLabel = model.taskProgress
-			? `Tasks · █${model.taskProgress.completed} done · ${model.taskProgress.total - model.taskProgress.completed} open`
+			? `Tasks · ${model.taskProgress.completed} done · ${model.taskProgress.total - model.taskProgress.completed} open`
 			: "Tasks";
 		let headerRight = model.taskProgress ? progressBar(theme, model.taskProgress.percentage, spec.headerBarWidth) : "";
 		if (model.currentTask && model.currentTask.totalSubtasks > 0 && mode !== "minimal") {
@@ -372,7 +373,7 @@ export function renderCompactDashboard(
 	// Current task (persisted focus or inferred first pending).
 	if (model.currentTask) {
 		if (mode === "minimal") {
-			lines.push(boxLine(theme, safeWidth, `${accent(theme, "▓")} ${accent(theme, fit(model.currentTask.title, inner - 3))}`));
+			lines.push(boxLine(theme, safeWidth, `${accent(theme, "")} ${accent(theme, fit(model.currentTask.title, inner - 3))}`));
 		} else {
 			const titleBudget = inner - visibleWidth(`Current  ${model.currentTask.id} · `);
 			lines.push(boxLine(theme, safeWidth, `${muted(theme, "Current")}  ${accent(theme, model.currentTask.id)} · ${accent(theme, fit(model.currentTask.title, titleBudget))}`));
@@ -426,7 +427,7 @@ export function renderCompactDashboard(
 	// that Ctrl+Shift+A turns the auditor on and off; narrow/minimal keep
 	// just the dot. The boxFooter right slot pushes both to the right edge,
 	// so the chord and its note are right-aligned by construction.
-	const auditorDot = model.auditorEnabled ? success(theme, "●") : muted(theme, "●");
+	const auditorDot = model.auditorEnabled ? success(theme, "") : muted(theme, "");
 	const auditorKey = opts.auditorKey ?? "ctrl+shift+a";
 	const right =
 		(mode === "wide" || mode === "medium") && bindingKeys(auditorKey).length
@@ -467,7 +468,7 @@ export function renderExpandedDashboard(
 		lines.push(boxLine(theme, safeWidth, dim(theme, `File: ${model.filePath}`)));
 	}
 	if (model.budget) {
-		lines.push(boxLine(theme, safeWidth, `${theme.fg("mdHeading", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
+		lines.push(boxLine(theme, safeWidth, muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)));
 	}
 
 	// Progress section (§4.2).
@@ -607,7 +608,7 @@ export function clampLinesToWidth(lines: string[], width: number): string[] {
 
 import type { AuditorDashboardModel, AuditResultCard } from "./auditor-dashboard-model.ts";
 
-const CHECK_SYMBOL = { passed: "█", running: "▓", pending: "░", failed: "X" } as const;
+const CHECK_SYMBOL = { passed: "", running: "", pending: "", failed: "" } as const;
 const CHECK_COLOR = { passed: "success", running: "accent", pending: "muted", failed: "error" } as const;
 
 /**
@@ -667,7 +668,7 @@ export function renderAuditResultCard(card: AuditResultCard, theme: Theme, width
 	const accentColor = success ? "success" : "error";
 	lines.push(boxHeader(theme, safeWidth, frame(theme, `Audit result ─ ${card.label}`)));
 	for (const line of card.lines) {
-		const symbol = success ? "█" : "X";
+		const symbol = success ? "" : "";
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(accentColor as RenderColor, symbol)} ${fit(line, inner - 4)}`));
 	}
 	lines.push(boxFooter(theme, safeWidth, ""));

@@ -789,8 +789,8 @@ function advanceAfterAnswer() {
 						continue;
 					}
 
-					// 1. Announcement header — "● Goal draft/tweak ready for confirmation."
-					if (/^● Goal (draft|tweak) ready for confirmation\.$/.test(trimmed)) {
+					// 1. Announcement header — " Goal draft/tweak ready for confirmation."
+					if (/^ Goal (draft|tweak) ready for confirmation\.$/.test(trimmed)) {
 						addWrapped(theme.fg("accent", rawLine));
 						continue;
 					}
@@ -882,11 +882,11 @@ function advanceAfterAnswer() {
 				for (let i = 0; i < questions.length; i++) {
 					const isActive = i === currentTab;
 					const isAnswered = answers.has(questions[i]!.id);
-					const label = ` ${isAnswered ? "■" : "□"} ${questions[i]!.id} `;
+					const label = ` ${isAnswered ? "" : ""} ${questions[i]!.id} `;
 					tabs.push(isActive ? theme.bg("selectedBg", theme.fg("text", label)) : theme.fg(isAnswered ? "success" : "muted", label));
 					tabs.push(" ");
 				}
-				const submitText = " ✓ Submit ";
+				const submitText = "  Submit ";
 				tabs.push(currentTab === questions.length ? theme.bg("selectedBg", theme.fg("text", submitText)) : theme.fg(allAnswered() ? "success" : "dim", submitText));
 				tabs.push(" →");
 				add(` ${tabs.join("")}`);
@@ -900,8 +900,8 @@ function advanceAfterAnswer() {
 					const start = lines.length;
 					const opt = opts[i]!;
 					const selected = i === optionIndex;
-					const prefix = selected ? theme.fg("accent", "> ") : "  ";
-					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ★") : "";
+					const prefix = selected ? theme.fg("accent", " ") : "  ";
+					const recTag = !opt.isCustom && q?.recommended === i ? theme.fg("success", " ") : "";
 					addWrapped(prefix + theme.fg(selected ? "accent" : "text", `${i + 1}. ${opt.label}`) + recTag);
 					optionRanges[i] = [start, lines.length - 1];
 				}
@@ -937,7 +937,7 @@ function advanceAfterAnswer() {
 				if (q.context) renderContextLines(q.context);
 				// Auditor toggle line between context and options
 				if (auditorToggleInit) {
-					const circle = auditorEnabled ? "█" : "░";
+					const circle = auditorEnabled ? "" : "";
 					const label = auditorEnabled ? "Auditor enabled" : "Auditor disabled";
 					const color = auditorEnabled ? "success" : "warning";
 					add(theme.fg(color, ` ${circle} ${label}`) + theme.fg("dim", `  (press '${controls.hint("toggleAuditor")}' to toggle)`));

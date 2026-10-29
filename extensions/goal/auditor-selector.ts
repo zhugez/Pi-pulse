@@ -3,7 +3,7 @@
  *
  * `/goal-settings` provider/model rows open a searchable selector: the
  * current-session/default choice (which clears the explicit provider/model),
- * authenticated models from the model registry (with a ✓ marker on the exact
+ * authenticated models from the model registry (with a * marker on the exact
  * current selection), and an advanced manual `provider/model` entry. The
  * thinking-level row offers Pi's seven levels or `(default)`.
  */
@@ -37,7 +37,7 @@ export function buildAuditorModelChoices(
 	return [
 		{
 			kind: "default",
-			label: `${configured ? "  " : session ? "✓ " : "  "}Current session / default${session ? ` (${session})` : " (system default)"}`,
+			label: `${configured ? "  " : session ? " " : "  "}Current session / default${session ? ` (${session})` : " (system default)"}`,
 		},
 		...models.map((model) => {
 			const key = `${model.provider}/${model.id}`;
@@ -45,10 +45,10 @@ export function buildAuditorModelChoices(
 				kind: "model" as const,
 				provider: model.provider,
 				model: model.id,
-				label: `${configured === key ? "✓ " : "  "}${auditorModelLabel(model)}`,
+				label: `${configured === key ? " " : "  "}${auditorModelLabel(model)}`,
 			};
 		}),
-		{ kind: "manual", label: "✎ Enter provider/model manually (advanced)" },
+		{ kind: "manual", label: " Enter provider/model manually (advanced)" },
 	];
 }
 
@@ -70,5 +70,5 @@ export function parseManualAuditorModel(input: string): { provider: string; mode
 }
 
 export function thinkingLevelChoices(current: string | undefined): string[] {
-	return ["(default)", ...AUDITOR_THINKING_LEVELS].map((level) => (level === current ? `✓ ${level}` : `  ${level}`));
+	return ["(default)", ...AUDITOR_THINKING_LEVELS].map((level) => (level === current ? ` ${level}` : `  ${level}`));
 }

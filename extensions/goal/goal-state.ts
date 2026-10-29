@@ -608,14 +608,14 @@ export function createGoalCore(
 	 * users out of scrollback while they review long goals and earlier context.
 	 *
 	 * Layout (sisyphus, running):
-	 *   ◆ Sisyphus  [▰▰▰▱▱] 3/5
-	 *   ├─ ⟡ extract validator … wire it … update tests.
+	 *   <bolt> Sisyphus  [███░░] 3/5
+	 *   ├─ * extract validator … wire it … update tests.
 	 *   ├─ Status: sisyphus running · auto-continue · 14m 21s · 24.3k tokens
 	 *   └─ .pi/goals/active_goal_xxx.md
 	 *
 	 * Layout (paused with blocker):
-	 *   ⊘ Goal paused
-	 *   ├─ ⟡ improve benchmark coverage for the parser
+	 *   - Goal paused
+	 *   ├─ * improve benchmark coverage for the parser
 	 *   ├─ Status: paused (agent) · 2m 14s · 12.4k tokens
 	 *   ├─ Blocker: cannot find the tests directory
 	 *   └─ Suggested: ask the user for the test location

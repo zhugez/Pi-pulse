@@ -344,9 +344,9 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				};
 				if (currentPhase === "done") {
 					if (core.auditProgress) core.auditProgress.recentOutput = [
-						"✓ All requirements verified",
-						"✓ Tests pass: 310/310",
-						"✓ No truncation cap remaining",
+						" All requirements verified",
+						" Tests pass: 310/310",
+						" No truncation cap remaining",
 					];
 					stopMockAuditTimer();
 					// Auto-clear audit after 3 more seconds

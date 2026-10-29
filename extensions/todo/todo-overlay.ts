@@ -147,7 +147,7 @@ export class TodoOverlay {
 		const showIds = selectShowTaskIds(overlayState);
 
 		const headingColor = hasActive ? "accent" : "dim";
-		const headingIcon = hasActive ? "●" : "○";
+		const headingIcon = hasActive ? "" : "";
 		const headingText = `${t("overlay.heading", OVERLAY_HEADING)} (${counts.completed}/${counts.total})`;
 		const heading = truncate(`${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, headingText)}`);
 
