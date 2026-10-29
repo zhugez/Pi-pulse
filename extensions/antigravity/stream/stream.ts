@@ -1494,6 +1494,291 @@ function parseResetSeconds(text: string): number {
   return Number.isFinite(num) && num > 0 ? num : 60;
 }
 
+type AntigravityRunContext = {
+  stream: AssistantMessageEventStream;
+  model: Model<Api>;
+  context: Context;
+  opts: AntigravityStreamOptions;
+};
+
+/**
+ * The streaming episode, lifted out of the factory so the exported entry point
+ * stays a thin driver. Destructured to the names the body already used.
+ */
+async function runAntigravityStream({ stream, model, context, opts }: AntigravityRunContext): Promise<void> {
+  const startTime = Date.now();
+  const output = createOutput(model);
+  try {
+    let creds = parseApiKey(opts.apiKey);
+    try {
+      const rotated = await acquireNextAccount(model.id);
+      if (rotated) creds = rotated;
+    } catch {
+      // Fall back to caller's provided apiKey on error
+    }
+    const triedAccessTokens = new Set<string>([creds.token]);
+    const primaryEndpoint = endpointCandidates()[0];
+    if (primaryEndpoint) prewarmConnection(primaryEndpoint);
+    // Skip loadCodeAssist roundtrip when credentials already carry a projectId.
+    const warmedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+    let projectId = resolveProjectId({
+      token: creds.token,
+      warmedProject,
+      credentialProjectId: creds.projectId,
+    });
+    setLastProjectId(projectId);
+
+    const effort = opts.reasoning ?? "off";
+    const isKnownModel = model.id in getCurrentAntigravityRouting();
+    const baseRuntimeModel =
+      antigravityEnv("RUNTIME_MODEL")?.trim() || getAntigravityRequestModelId(model.id, effort);
+
+    let initialRuntimeModel = baseRuntimeModel;
+    // Skip pre-flight model discovery for known static models to optimize TTFT latency.
+    // Dynamic lookup is only needed for unmapped custom models.
+    if (!isKnownModel && !antigravityEnv("RUNTIME_MODEL")) {
+      const dynamic = await fetchAvailableRuntimeModel(creds.token, projectId, baseRuntimeModel);
+      if (dynamic?.id && /^(gemini-|claude-|gpt-oss-)/i.test(dynamic.id)) {
+        initialRuntimeModel = dynamic.id;
+      }
+    }
+
+    const runtimeCandidates = [initialRuntimeModel];
+    const fallback = getFallbackRuntimeModel(initialRuntimeModel, effort);
+    if (fallback && fallback !== initialRuntimeModel) {
+      runtimeCandidates.push(fallback);
+    }
+
+    let requestHeaders = antigravityHeaders(creds.token);
+
+    let response: Response | undefined;
+    let lastText = "";
+    let received = false;
+    let runtimeModel = initialRuntimeModel;
+
+    for (let emptyAttempt = 0; emptyAttempt <= 2; emptyAttempt++) {
+      if (opts.signal?.aborted) throw new Error("Request was aborted");
+      if (emptyAttempt > 0) {
+        const delay = 500 * 2 ** (emptyAttempt - 1);
+        await new Promise((res) => setTimeout(res, delay));
+      }
+
+      for (let candIdx = 0; candIdx < runtimeCandidates.length; candIdx++) {
+        runtimeModel = runtimeCandidates[candIdx]!;
+        setLastResolvedRuntimeModel(runtimeModel);
+        const body = JSON.stringify(buildRequest(model, context, projectId, opts, runtimeModel));
+
+        for (const endpoint of endpointCandidates()) {
+          setLastEndpoint(endpoint);
+          try {
+            response = await fetchWithHeaderDeadline(
+              `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
+              {
+                method: "POST",
+                headers: requestHeaders,
+                body,
+              },
+              opts.signal,
+              streamHeaderTimeoutMs(),
+              streamStallTimeoutMs(),
+            );
+          } catch (fetchErr) {
+            if (opts.signal?.aborted) throw fetchErr;
+            lastText = safeError(fetchErr);
+            setLastError(lastText);
+            continue;
+          }
+          setLastStatus(response.status);
+          if (response.ok) break;
+          lastText = await response.text();
+          if (
+            response.status === 429 &&
+            (/Individual quota reached/i.test(lastText) ||
+              /Resets? in /i.test(lastText) ||
+              (!/rate.?limit/i.test(lastText) &&
+                /quota exceeded|exceeded your|daily limit/i.test(lastText)))
+          ) {
+            break;
+          }
+          // Do not fall back to sandbox/prod endpoints on 404: daily-cloudcode-pa
+          // is the canonical catalog host, while cloudcode-pa returns a spurious 429
+          // for daily-only models (such as gemini-4-argon-*), masking the real 404.
+          if (response.status === 404) break;
+          if (![403, 429, 500, 502, 503, 504].includes(response.status)) break;
+        }
+
+        if (response?.ok) break;
+        if (response?.status === 404) {
+          if (candIdx + 1 < runtimeCandidates.length) {
+            continue;
+          }
+          if (isKnownModel && candIdx === runtimeCandidates.length - 1) {
+            const dynamic = await fetchAvailableRuntimeModel(
+              creds.token,
+              projectId,
+              baseRuntimeModel,
+            );
+            if (
+              dynamic?.id &&
+              !runtimeCandidates.includes(dynamic.id) &&
+              /^(gemini-|claude-|gpt-oss-)/i.test(dynamic.id)
+            ) {
+              runtimeCandidates.push(dynamic.id);
+              continue;
+            }
+          }
+        }
+        break;
+      }
+
+      if (!response || !response.ok) {
+        if (antigravityEnv("DEBUG_DUMP") === "1") {
+          try {
+            const body = JSON.stringify(
+              buildRequest(model, context, projectId, opts, runtimeModel),
+            );
+            let parsedBody: unknown = body;
+            try {
+              parsedBody = JSON.parse(body) as unknown;
+            } catch {
+              parsedBody = body;
+            }
+            await (
+              await import("node:fs/promises")
+            ).writeFile(
+              "/tmp/antigravity-last-request.json",
+              JSON.stringify(
+                {
+                  status: response?.status,
+                  runtimeModel,
+                  lastText: lastText.slice(0, 4000),
+                  body: parsedBody,
+                },
+                null,
+                2,
+              ),
+            );
+          } catch {
+            // ignore dump failures
+          }
+        }
+        const friendly = friendlyAntigravityError(response?.status, lastText);
+        if (response?.status === 404) {
+          markAccountModelUnsupported(creds.token, model.id);
+          const next = await failoverToNextAccount(triedAccessTokens, model.id);
+          if (next) {
+            triedAccessTokens.add(next.token);
+            creds = next;
+            requestHeaders = antigravityHeaders(creds.token);
+            const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+            projectId = resolveProjectId({
+              token: creds.token,
+              warmedProject: switchedProject,
+              credentialProjectId: creds.projectId,
+            });
+            setLastProjectId(projectId);
+            emptyAttempt = -1;
+            continue;
+          }
+        }
+        const isQuota =
+          response?.status === 429 ||
+          (response?.status === 403 &&
+            /quota|exhausted|rate.?limit|limit reached/i.test(lastText));
+        if (isQuota) {
+          const waitSeconds = parseResetSeconds(lastText);
+          markAccountCooldown(creds.token, waitSeconds * 1000);
+          const next = await failoverToNextAccount(triedAccessTokens, model.id);
+          if (next) {
+            triedAccessTokens.add(next.token);
+            creds = next;
+            requestHeaders = antigravityHeaders(creds.token);
+            const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+            projectId = resolveProjectId({
+              token: creds.token,
+              warmedProject: switchedProject,
+              credentialProjectId: creds.projectId,
+            });
+            setLastProjectId(projectId);
+            emptyAttempt = -1;
+            continue;
+          }
+          throw new Error(friendly);
+        }
+        throw new Error(
+          `Antigravity API error (${response?.status ?? "no response"}, ${formatRequestDiagnostics({ projectId, runtimeModel })}): ${friendly}`,
+        );
+      }
+
+      output.content = [];
+      output.usage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      output.stopReason = "stop";
+
+      try {
+        received = await streamResponse(response, stream, output, model);
+        if (received) break;
+      } catch (streamErr) {
+        const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        const isStreamQuota = /429|quota|exhausted|rate.?limit|limit reached/i.test(errText);
+        if (isStreamQuota && output.content.length === 0) {
+          const waitSeconds = parseResetSeconds(errText);
+          markAccountCooldown(creds.token, waitSeconds * 1000);
+          const next = await failoverToNextAccount(triedAccessTokens, model.id);
+          if (next) {
+            triedAccessTokens.add(next.token);
+            creds = next;
+            requestHeaders = antigravityHeaders(creds.token);
+            const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+            projectId = resolveProjectId({
+              token: creds.token,
+              warmedProject: switchedProject,
+              credentialProjectId: creds.projectId,
+            });
+            setLastProjectId(projectId);
+            emptyAttempt = -1;
+            continue;
+          }
+        }
+        throw streamErr;
+      }
+    }
+
+    if (!received) throw new Error("Antigravity API returned an empty response");
+    setLastLatencyMs(Date.now() - startTime);
+    if (output.stopReason === "error" || output.stopReason === "aborted") {
+      const errorDetail = output.rawStopReason
+        ? `Provider stopped with: ${output.rawStopReason}`
+        : "An unknown error occurred";
+      output.errorMessage = output.errorMessage || errorDetail;
+      setLastError(output.errorMessage);
+      stream.push({ type: "error", reason: output.stopReason, error: output });
+    } else if (output.stopReason === "pending") {
+      throw new Error("Antigravity API returned no stop reason");
+    } else {
+      stream.push({ type: "done", reason: output.stopReason, message: output });
+    }
+    stream.end();
+  } catch (error) {
+    setLastLatencyMs(Date.now() - startTime);
+    output.stopReason = opts.signal?.aborted ? "aborted" : "error";
+    output.errorMessage = safeError(error);
+    setLastError(output.errorMessage);
+    // Ensure endpoint is recorded even if failure happened before setLastEndpoint.
+    if (!getCurrentEndpoint() && endpointCandidates()[0]) {
+      setLastEndpoint(endpointCandidates()[0]);
+    }
+    stream.push({ type: "error", reason: output.stopReason, error: output });
+    stream.end();
+  }
+}
+
 export function streamAntigravity(
   model: Model<Api>,
   context: Context,
@@ -1502,279 +1787,7 @@ export function streamAntigravity(
   const stream = createAssistantMessageEventStream();
   const opts = options ?? {};
 
-  void runWithDiagnostics(async () => {
-    const startTime = Date.now();
-    const output = createOutput(model);
-    try {
-      let creds = parseApiKey(opts.apiKey);
-      try {
-        const rotated = await acquireNextAccount(model.id);
-        if (rotated) creds = rotated;
-      } catch {
-        // Fall back to caller's provided apiKey on error
-      }
-      const triedAccessTokens = new Set<string>([creds.token]);
-      const primaryEndpoint = endpointCandidates()[0];
-      if (primaryEndpoint) prewarmConnection(primaryEndpoint);
-      // Skip loadCodeAssist roundtrip when credentials already carry a projectId.
-      const warmedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
-      let projectId = resolveProjectId({
-        token: creds.token,
-        warmedProject,
-        credentialProjectId: creds.projectId,
-      });
-      setLastProjectId(projectId);
-
-      const effort = opts.reasoning ?? "off";
-      const isKnownModel = model.id in getCurrentAntigravityRouting();
-      const baseRuntimeModel =
-        antigravityEnv("RUNTIME_MODEL")?.trim() || getAntigravityRequestModelId(model.id, effort);
-
-      let initialRuntimeModel = baseRuntimeModel;
-      // Skip pre-flight model discovery for known static models to optimize TTFT latency.
-      // Dynamic lookup is only needed for unmapped custom models.
-      if (!isKnownModel && !antigravityEnv("RUNTIME_MODEL")) {
-        const dynamic = await fetchAvailableRuntimeModel(creds.token, projectId, baseRuntimeModel);
-        if (dynamic?.id && /^(gemini-|claude-|gpt-oss-)/i.test(dynamic.id)) {
-          initialRuntimeModel = dynamic.id;
-        }
-      }
-
-      const runtimeCandidates = [initialRuntimeModel];
-      const fallback = getFallbackRuntimeModel(initialRuntimeModel, effort);
-      if (fallback && fallback !== initialRuntimeModel) {
-        runtimeCandidates.push(fallback);
-      }
-
-      let requestHeaders = antigravityHeaders(creds.token);
-
-      let response: Response | undefined;
-      let lastText = "";
-      let received = false;
-      let runtimeModel = initialRuntimeModel;
-
-      for (let emptyAttempt = 0; emptyAttempt <= 2; emptyAttempt++) {
-        if (opts.signal?.aborted) throw new Error("Request was aborted");
-        if (emptyAttempt > 0) {
-          const delay = 500 * 2 ** (emptyAttempt - 1);
-          await new Promise((res) => setTimeout(res, delay));
-        }
-
-        for (let candIdx = 0; candIdx < runtimeCandidates.length; candIdx++) {
-          runtimeModel = runtimeCandidates[candIdx]!;
-          setLastResolvedRuntimeModel(runtimeModel);
-          const body = JSON.stringify(buildRequest(model, context, projectId, opts, runtimeModel));
-
-          for (const endpoint of endpointCandidates()) {
-            setLastEndpoint(endpoint);
-            try {
-              response = await fetchWithHeaderDeadline(
-                `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
-                {
-                  method: "POST",
-                  headers: requestHeaders,
-                  body,
-                },
-                opts.signal,
-                streamHeaderTimeoutMs(),
-                streamStallTimeoutMs(),
-              );
-            } catch (fetchErr) {
-              if (opts.signal?.aborted) throw fetchErr;
-              lastText = safeError(fetchErr);
-              setLastError(lastText);
-              continue;
-            }
-            setLastStatus(response.status);
-            if (response.ok) break;
-            lastText = await response.text();
-            if (
-              response.status === 429 &&
-              (/Individual quota reached/i.test(lastText) ||
-                /Resets? in /i.test(lastText) ||
-                (!/rate.?limit/i.test(lastText) &&
-                  /quota exceeded|exceeded your|daily limit/i.test(lastText)))
-            ) {
-              break;
-            }
-            // Do not fall back to sandbox/prod endpoints on 404: daily-cloudcode-pa
-            // is the canonical catalog host, while cloudcode-pa returns a spurious 429
-            // for daily-only models (such as gemini-4-argon-*), masking the real 404.
-            if (response.status === 404) break;
-            if (![403, 429, 500, 502, 503, 504].includes(response.status)) break;
-          }
-
-          if (response?.ok) break;
-          if (response?.status === 404) {
-            if (candIdx + 1 < runtimeCandidates.length) {
-              continue;
-            }
-            if (isKnownModel && candIdx === runtimeCandidates.length - 1) {
-              const dynamic = await fetchAvailableRuntimeModel(
-                creds.token,
-                projectId,
-                baseRuntimeModel,
-              );
-              if (
-                dynamic?.id &&
-                !runtimeCandidates.includes(dynamic.id) &&
-                /^(gemini-|claude-|gpt-oss-)/i.test(dynamic.id)
-              ) {
-                runtimeCandidates.push(dynamic.id);
-                continue;
-              }
-            }
-          }
-          break;
-        }
-
-        if (!response || !response.ok) {
-          if (antigravityEnv("DEBUG_DUMP") === "1") {
-            try {
-              const body = JSON.stringify(
-                buildRequest(model, context, projectId, opts, runtimeModel),
-              );
-              let parsedBody: unknown = body;
-              try {
-                parsedBody = JSON.parse(body) as unknown;
-              } catch {
-                parsedBody = body;
-              }
-              await (
-                await import("node:fs/promises")
-              ).writeFile(
-                "/tmp/antigravity-last-request.json",
-                JSON.stringify(
-                  {
-                    status: response?.status,
-                    runtimeModel,
-                    lastText: lastText.slice(0, 4000),
-                    body: parsedBody,
-                  },
-                  null,
-                  2,
-                ),
-              );
-            } catch {
-              // ignore dump failures
-            }
-          }
-          const friendly = friendlyAntigravityError(response?.status, lastText);
-          if (response?.status === 404) {
-            markAccountModelUnsupported(creds.token, model.id);
-            const next = await failoverToNextAccount(triedAccessTokens, model.id);
-            if (next) {
-              triedAccessTokens.add(next.token);
-              creds = next;
-              requestHeaders = antigravityHeaders(creds.token);
-              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
-              projectId = resolveProjectId({
-                token: creds.token,
-                warmedProject: switchedProject,
-                credentialProjectId: creds.projectId,
-              });
-              setLastProjectId(projectId);
-              emptyAttempt = -1;
-              continue;
-            }
-          }
-          const isQuota =
-            response?.status === 429 ||
-            (response?.status === 403 &&
-              /quota|exhausted|rate.?limit|limit reached/i.test(lastText));
-          if (isQuota) {
-            const waitSeconds = parseResetSeconds(lastText);
-            markAccountCooldown(creds.token, waitSeconds * 1000);
-            const next = await failoverToNextAccount(triedAccessTokens, model.id);
-            if (next) {
-              triedAccessTokens.add(next.token);
-              creds = next;
-              requestHeaders = antigravityHeaders(creds.token);
-              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
-              projectId = resolveProjectId({
-                token: creds.token,
-                warmedProject: switchedProject,
-                credentialProjectId: creds.projectId,
-              });
-              setLastProjectId(projectId);
-              emptyAttempt = -1;
-              continue;
-            }
-            throw new Error(friendly);
-          }
-          throw new Error(
-            `Antigravity API error (${response?.status ?? "no response"}, ${formatRequestDiagnostics({ projectId, runtimeModel })}): ${friendly}`,
-          );
-        }
-
-        output.content = [];
-        output.usage = {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-        output.stopReason = "stop";
-
-        try {
-          received = await streamResponse(response, stream, output, model);
-          if (received) break;
-        } catch (streamErr) {
-          const errText = streamErr instanceof Error ? streamErr.message : String(streamErr);
-          const isStreamQuota = /429|quota|exhausted|rate.?limit|limit reached/i.test(errText);
-          if (isStreamQuota && output.content.length === 0) {
-            const waitSeconds = parseResetSeconds(errText);
-            markAccountCooldown(creds.token, waitSeconds * 1000);
-            const next = await failoverToNextAccount(triedAccessTokens, model.id);
-            if (next) {
-              triedAccessTokens.add(next.token);
-              creds = next;
-              requestHeaders = antigravityHeaders(creds.token);
-              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
-              projectId = resolveProjectId({
-                token: creds.token,
-                warmedProject: switchedProject,
-                credentialProjectId: creds.projectId,
-              });
-              setLastProjectId(projectId);
-              emptyAttempt = -1;
-              continue;
-            }
-          }
-          throw streamErr;
-        }
-      }
-
-      if (!received) throw new Error("Antigravity API returned an empty response");
-      setLastLatencyMs(Date.now() - startTime);
-      if (output.stopReason === "error" || output.stopReason === "aborted") {
-        const errorDetail = output.rawStopReason
-          ? `Provider stopped with: ${output.rawStopReason}`
-          : "An unknown error occurred";
-        output.errorMessage = output.errorMessage || errorDetail;
-        setLastError(output.errorMessage);
-        stream.push({ type: "error", reason: output.stopReason, error: output });
-      } else if (output.stopReason === "pending") {
-        throw new Error("Antigravity API returned no stop reason");
-      } else {
-        stream.push({ type: "done", reason: output.stopReason, message: output });
-      }
-      stream.end();
-    } catch (error) {
-      setLastLatencyMs(Date.now() - startTime);
-      output.stopReason = opts.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = safeError(error);
-      setLastError(output.errorMessage);
-      // Ensure endpoint is recorded even if failure happened before setLastEndpoint.
-      if (!getCurrentEndpoint() && endpointCandidates()[0]) {
-        setLastEndpoint(endpointCandidates()[0]);
-      }
-      stream.push({ type: "error", reason: output.stopReason, error: output });
-      stream.end();
-    }
-  });
+  void runWithDiagnostics(() => runAntigravityStream({ stream, model, context, opts }));
 
   return stream;
 }

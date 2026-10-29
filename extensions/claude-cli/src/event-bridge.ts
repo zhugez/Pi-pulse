@@ -162,6 +162,607 @@ function mapStopReason(
  * - message lifecycle (message_start for usage, message_delta for stop reason, message_stop for done)
  * - unsupported block types (tool_use, thinking) with warnings
  */
+/** Fold per-model spend into one `ClaudeUsage`; undefined when the CLI sent none. */
+function sumModelUsage(
+  modelUsage: Record<string, ClaudeModelUsage> | undefined,
+): ClaudeUsage | undefined {
+  if (!modelUsage) return undefined;
+  const entries = Object.values(modelUsage);
+  if (entries.length === 0) return undefined;
+  const total = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  };
+  for (const entry of entries) {
+    total.input_tokens += entry.inputTokens ?? 0;
+    total.output_tokens += entry.outputTokens ?? 0;
+    total.cache_read_input_tokens += entry.cacheReadInputTokens ?? 0;
+    total.cache_creation_input_tokens += entry.cacheCreationInputTokens ?? 0;
+  }
+  return total;
+}
+
+/** Prompt size of one cycle: everything the model read, excluding output. */
+function contextOf(usage: ClaudeUsage): number {
+  return (
+    (usage.input_tokens ?? 0) +
+    (usage.cache_read_input_tokens ?? 0) +
+    (usage.cache_creation_input_tokens ?? 0)
+  );
+}
+
+/** The compact boundary's metadata, tolerating either key spelling. */
+function readCompactMetadata(envelope: ClaudeCompactBoundary): {
+  trigger?: string;
+  preTokens?: number;
+  postTokens?: number;
+  durationMs?: number;
+} {
+  const raw = (envelope.compact_metadata ??
+    envelope.compactMetadata ??
+    {}) as Record<string, unknown>;
+  const num = (...keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const value = raw[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+  return {
+    trigger: typeof raw.trigger === "string" ? raw.trigger : undefined,
+    preTokens: num("pre_tokens", "preTokens"),
+    postTokens: num("post_tokens", "postTokens"),
+    durationMs: num("duration_ms", "durationMs"),
+  };
+}
+
+type DeltaContext = {
+  output: AssistantMessage;
+  stream: AssistantMessageEventStream;
+  materializeThinking: (block: TrackedContentBlock) => void;
+  trackedFor: (event: ClaudeApiEvent) => TrackedBlock | undefined;
+};
+
+/** One content_block_delta: text, thinking, tool-call JSON or a signature. */
+function applyContentBlockDelta(
+  { output, stream, materializeThinking, trackedFor }: DeltaContext,
+  event: ClaudeApiEvent,
+): void {
+  const deltaType = event.delta?.type;
+  const block = trackedFor(event);
+  if (!block) return;
+
+  if (deltaType === "text_delta" && event.delta!.text != null) {
+    if (block.type !== "text") return;
+    block.text += event.delta!.text;
+    (output.content[block.contentIndex] as TextContent).text = block.text;
+    stream.push({
+      type: "text_delta",
+      contentIndex: block.contentIndex,
+      delta: event.delta!.text,
+      partial: output,
+    });
+  } else if (
+    deltaType === "thinking_delta" &&
+    event.delta!.thinking != null
+  ) {
+    if (block.type !== "thinking") return;
+    // Empty thinking_delta events accompany encrypted thinking (verified
+    // on sonnet-5): they carry no plaintext, so they must not bring a
+    // thinking block into existence.
+    if (block.contentIndex === -1) {
+      if (event.delta!.thinking.length === 0) return;
+      materializeThinking(block);
+    }
+    block.text += event.delta!.thinking;
+    (output.content[block.contentIndex] as ThinkingContent).thinking =
+      block.text;
+    stream.push({
+      type: "thinking_delta",
+      contentIndex: block.contentIndex,
+      delta: event.delta!.thinking,
+      partial: output,
+    });
+  } else if (
+    deltaType === "input_json_delta" &&
+    event.delta!.partial_json != null
+  ) {
+    if (block.type !== "tool_use") return;
+    block.partialJson += event.delta!.partial_json;
+    try {
+      const parsed = JSON.parse(block.partialJson);
+      // Only an object may overwrite the arguments. A payload that parses
+      // to null/array/scalar would otherwise land on the streaming partial
+      // and be shown to the user as the tool's arguments.
+      if (isArgumentObject(parsed)) {
+        block.arguments = parsed;
+        (output.content[block.contentIndex] as any).arguments =
+          block.arguments;
+      }
+    } catch {
+      // Partial JSON not yet parseable -- keep previous arguments
+    }
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: block.contentIndex,
+      delta: event.delta!.partial_json,
+      partial: output,
+    });
+  } else if (
+    deltaType === "signature_delta" &&
+    event.delta!.signature != null
+  ) {
+    if (block.type !== "thinking") return;
+    if (block.contentIndex === -1) {
+      // Signature before (or without) any plaintext: hold it in case
+      // plaintext follows. If it never does, the block is dropped.
+      block.pendingSignature =
+        (block.pendingSignature ?? "") + event.delta!.signature;
+      return;
+    }
+    const contentBlock = output.content[
+      block.contentIndex
+    ] as ThinkingContent;
+    contentBlock.thinkingSignature =
+      (contentBlock.thinkingSignature || "") + event.delta!.signature;
+  }
+}
+
+type ApplyContentBlockStopContext = {
+  blocks: TrackedBlock[];
+  cycle: number;
+  stream: AssistantMessageEventStream;
+  output: AssistantMessage;
+};
+
+/** One content_block_stop: flush the tracked block as its *_end event. */
+function applyContentBlockStop({ blocks, cycle, stream, output }: ApplyContentBlockStopContext, event: ClaudeApiEvent): void {
+  const idx = blocks.findIndex(
+    (b) => b.cycle === cycle && b.index === event.index,
+  );
+  if (idx === -1) return;
+  const block = blocks[idx];
+
+  // Encrypted thinking: signature only, no plaintext. Drop it rather than
+  // emit a content block with nothing to show.
+  if (block.type === "thinking" && block.contentIndex === -1) {
+    blocks.splice(idx, 1);
+    return;
+  }
+
+  // Clean up the tracking index from the block (no longer needed)
+  delete (block as any).index;
+
+  if (block.type === "text") {
+    stream.push({
+      type: "text_end",
+      contentIndex: block.contentIndex,
+      content: block.text,
+      partial: output,
+    });
+  } else if (block.type === "thinking") {
+    stream.push({
+      type: "thinking_end",
+      contentIndex: block.contentIndex,
+      content: block.text,
+      partial: output,
+    });
+  } else if (block.type === "tool_use") {
+    // Arguments stream in as input_json_delta events. A call with NO
+    // arguments -- mcp({}), artifact_list() -- sends no deltas at all, so
+    // the accumulator is still "" here. JSON.parse("") throws, and handing
+    // pi the raw "" made it reject the call against the tool's schema with
+    // `root: must be object`. Empty means {}, not malformed: that is the
+    // difference between "the model sent no arguments" and "the arguments
+    // did not arrive intact".
+    //
+    // Anything that is non-empty but unusable still passes through as its
+    // raw string, on purpose. That text is the only evidence of what
+    // actually arrived, and coercing it to {} would turn a visible failure
+    // into a tool that silently ran with no arguments.
+    let finalArgs: Record<string, unknown> | string;
+    if (block.partialJson.trim() === "") {
+      finalArgs = translateClaudeArgsToPi(block.claudeName, {});
+    } else {
+      try {
+        const parsed = JSON.parse(block.partialJson);
+        finalArgs = isArgumentObject(parsed)
+          ? translateClaudeArgsToPi(block.claudeName, parsed)
+          : block.partialJson;
+      } catch {
+        finalArgs = block.partialJson;
+      }
+    }
+
+    (output.content[block.contentIndex] as any).arguments = finalArgs;
+
+    // ToolCall.arguments is typed as Record<string, any> in pi-ai, but we
+    // intentionally emit a raw string when JSON parse fails completely.
+    // Pi handles string arguments gracefully at runtime.
+    const toolCall = {
+      type: "toolCall" as const,
+      id: block.id,
+      name: block.name,
+      arguments: finalArgs,
+    } as ToolCall;
+
+    stream.push({
+      type: "toolcall_end",
+      contentIndex: block.contentIndex,
+      toolCall,
+      partial: output,
+    });
+  }
+}
+
+type StartContext = {
+  blocks: TrackedBlock[];
+  output: AssistantMessage;
+  cycle: number;
+  stream: AssistantMessageEventStream;
+};
+
+/** content_block_start: begin tracking the block and emit its *_start event. */
+function applyContentBlockStart({ blocks, output, cycle, stream }: StartContext, event: ClaudeApiEvent): void {
+  const blockType = event.content_block?.type;
+
+  if (blockType === "text") {
+    const block: TrackedContentBlock = {
+      type: "text",
+      text: "",
+      index: event.index ?? 0,
+      cycle,
+      contentIndex: output.content.length,
+    };
+    blocks.push(block);
+    output.content.push({ type: "text" as const, text: "" });
+
+    stream.push({
+      type: "text_start",
+      contentIndex: block.contentIndex,
+      partial: output,
+    });
+  } else if (blockType === "thinking") {
+    // Deliberately NOT materialized yet. Several Claude models (verified:
+    // fable-5, opus-5, sonnet-5 at effort medium; haiku-4-5 is the
+    // exception) stream ENCRYPTED thinking: a multi-kilobyte
+    // signature_delta with no thinking_delta at all. Materializing on
+    // start produced a thinking block with no text, which front-ends
+    // faithfully rendered as an empty "thought". The block is created on
+    // the first plaintext delta and dropped at block_stop if none arrives.
+    const block: TrackedContentBlock = {
+      type: "thinking",
+      text: "",
+      index: event.index ?? 0,
+      cycle,
+      contentIndex: -1,
+    };
+    blocks.push(block);
+  } else if (blockType === "tool_use") {
+    const claudeName = event.content_block!.name!;
+
+    // Observer mode: the CLI executes its own tools (built-ins, WebSearch,
+    // user MCP, Task). Those surface as marker text via the envelope path,
+    // never as pi toolCall blocks. Only HANDOFF tools — custom pi tools
+    // behind the schema-only MCP server — become toolCalls for pi's loop.
+    if (!isHandoffClaudeTool(claudeName)) {
+      return;
+    }
+
+    const piName = mapClaudeToolNameToPi(claudeName);
+    const id = event.content_block!.id!;
+
+    const block: TrackedToolBlock = {
+      type: "tool_use",
+      index: event.index ?? 0,
+      cycle,
+      contentIndex: output.content.length,
+      id,
+      name: piName,
+      claudeName,
+      arguments: {},
+      partialJson: "",
+    };
+    blocks.push(block);
+    output.content.push({
+      type: "toolCall" as const,
+      id,
+      name: piName,
+      arguments: {},
+    } as ToolCall);
+
+    stream.push({
+      type: "toolcall_start",
+      contentIndex: block.contentIndex,
+      partial: output,
+    });
+  }
+  // Unknown block types silently ignored
+}
+
+type ApplyResultContext = {
+  output: AssistantMessage;
+  cumulativeUsage: Required<ClaudeUsage>;
+  cycleUsage: { value: ClaudeUsage };
+  recomputeUsage: () => void;
+  appendTextBlock: (text: string) => void;
+};
+
+/** The result envelope closes the episode: final usage, cost and stop reason. */
+function applyResultEnvelope(
+  { output, cumulativeUsage, cycleUsage, recomputeUsage, appendTextBlock }: ApplyResultContext,
+  result: ClaudeResultMessage,
+): void {
+  // Authoritative spend for the whole episode. `modelUsage` is preferred
+  // over `usage` because `usage` is the MAIN AGENT ONLY: sub-agents run
+  // inside the CLI and never appear in the parent stream, so their tokens
+  // — often the majority — were simply missing from what the host billed.
+  // Same for helper models like the haiku auto-titler.
+  //
+  // Measured 2026-08-27: a lane's turn reported $2.34 while seven
+  // sub-agents spent 28.6M cache-read tokens on top of it, a 10x
+  // under-report. On a captured single-sub-agent episode `modelUsage`
+  // summed to exactly main + sub-agent (102,641 cache-read / 56,920
+  // cache-write), which is why it is trusted here.
+  const totals = sumModelUsage(result.modelUsage) ?? result.usage;
+  if (totals) {
+    cumulativeUsage.input_tokens =
+      totals.input_tokens ?? cumulativeUsage.input_tokens;
+    cumulativeUsage.output_tokens =
+      totals.output_tokens ?? cumulativeUsage.output_tokens;
+    cumulativeUsage.cache_read_input_tokens =
+      totals.cache_read_input_tokens ??
+      cumulativeUsage.cache_read_input_tokens;
+    cumulativeUsage.cache_creation_input_tokens =
+      totals.cache_creation_input_tokens ??
+      cumulativeUsage.cache_creation_input_tokens;
+    cycleUsage.value = {};
+    recomputeUsage();
+  }
+
+  // Safety net: whatever ended the SSE stream early, the result envelope
+  // carries the episode's final answer — never let it be lost.
+  const finalText = (result.result ?? "").trim();
+  if (finalText) {
+    const streamedText = output.content
+      .filter((c): c is TextContent => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
+    const tail = finalText.slice(-Math.min(finalText.length, 60));
+    if (!streamedText.includes(tail)) {
+      appendTextBlock(finalText);
+    }
+  }
+}
+
+type CompactBoundaryContext = {
+  cumulativeUsage: Required<ClaudeUsage>;
+  cycleUsage: { value: ClaudeUsage };
+  lastCycle: { tokens: number };
+  recomputeUsage: () => void;
+  appendTextBlock: (text: string) => void;
+};
+
+/** The compact boundary: bank the finished cycle, then report the marker. */
+function applyCompactBoundary(
+  { cumulativeUsage, cycleUsage, lastCycle, recomputeUsage, appendTextBlock }: CompactBoundaryContext,
+  envelope: ClaudeCompactBoundary,
+): void {
+  const meta = readCompactMetadata(envelope);
+
+  // The context the model holds NOW is the compacted one. The CLI's
+  // summarization pass is an API call whose prompt is the entire
+  // pre-compaction conversation, and it is the last `message_start` this
+  // bridge sees before the CLI carries on — so left alone, the latch keeps
+  // that prompt as "the last cycle". Captured 2026-09-16: pi was told
+  // 316,760 for a session the CLI had just cut to 37,239, and compacted its
+  // own record on the phantom two minutes later. Bank the finished cycle
+  // first so recomputeUsage() cannot re-latch it.
+  if (meta.postTokens !== undefined && meta.postTokens > 0) {
+    cumulativeUsage.input_tokens += cycleUsage.value.input_tokens ?? 0;
+    cumulativeUsage.output_tokens += cycleUsage.value.output_tokens ?? 0;
+    cumulativeUsage.cache_read_input_tokens +=
+      cycleUsage.value.cache_read_input_tokens ?? 0;
+    cumulativeUsage.cache_creation_input_tokens +=
+      cycleUsage.value.cache_creation_input_tokens ?? 0;
+    cycleUsage.value = {};
+    lastCycle.tokens = meta.postTokens;
+    recomputeUsage();
+  }
+
+  // Same wire shape as every other marker (`[Claude Code · Name {json}]`),
+  // no `#id` tag because nothing pairs with it. Only reported figures go
+  // in: a host must not read an absent `postTokens` as zero.
+  const payload: Record<string, unknown> = {};
+  if (meta.trigger !== undefined) payload.trigger = meta.trigger;
+  if (meta.preTokens !== undefined) payload.preTokens = meta.preTokens;
+  if (meta.postTokens !== undefined) payload.postTokens = meta.postTokens;
+  if (meta.durationMs !== undefined) payload.durationMs = meta.durationMs;
+  appendTextBlock(`[Claude Code · compact ${JSON.stringify(payload)}]`);
+}
+
+type MessageDeltaContext = {
+  output: AssistantMessage;
+  cycleUsage: { value: ClaudeUsage };
+  recomputeUsage: () => void;
+};
+
+/** message_delta carries the cycle's final stop reason and usage. */
+function applyMessageDelta(
+  { output, cycleUsage, recomputeUsage }: MessageDeltaContext,
+  event: ClaudeApiEvent,
+): void {
+  if (event.delta?.stop_reason) {
+    // The LAST cycle's stop reason is the episode's stop reason.
+    output.stopReason = mapStopReason(event.delta.stop_reason);
+  }
+
+  const usage = event.usage;
+  if (usage) {
+    // message_delta carries the cycle's final numbers — overwrite within
+    // the cycle, never across cycles (those are banked at message_start).
+    if (usage.input_tokens != null)
+      cycleUsage.value.input_tokens = usage.input_tokens;
+    if (usage.output_tokens != null)
+      cycleUsage.value.output_tokens = usage.output_tokens;
+    if (usage.cache_read_input_tokens != null)
+      cycleUsage.value.cache_read_input_tokens = usage.cache_read_input_tokens;
+    if (usage.cache_creation_input_tokens != null)
+      cycleUsage.value.cache_creation_input_tokens =
+        usage.cache_creation_input_tokens;
+    recomputeUsage();
+  }
+}
+
+type TextBlockContext = {
+  blocks: TrackedBlock[];
+  output: AssistantMessage;
+  started: { value: boolean };
+  stream: AssistantMessageEventStream;
+};
+
+/** Append a synthetic text block (markers) to the message being built. */
+function appendTextBlockContext(
+  { blocks, output, started, stream }: TextBlockContext,
+  text: string,
+): void {
+  if (!started.value) {
+    stream.push({ type: "start", partial: output });
+    started.value = true;
+  }
+  const contentIndex = output.content.length;
+  blocks.push({ type: "text", text, index: -1, cycle: -1, contentIndex });
+  output.content.push({ type: "text" as const, text: "" });
+  stream.push({ type: "text_start", contentIndex, partial: output });
+  (output.content[contentIndex] as TextContent).text = text;
+  stream.push({
+    type: "text_delta",
+    contentIndex,
+    delta: text,
+    partial: output,
+  });
+  stream.push({
+    type: "text_end",
+    contentIndex,
+    content: text,
+    partial: output,
+  });
+}
+
+type UserEnvelopeContext = {
+  markedTools: Map<string, string>;
+  forwardedResultIds: Set<string>;
+  appendTextBlock: (text: string) => void;
+};
+
+/** A user envelope: pair tool results with their earlier call markers. */
+function applyUserEnvelope(
+  { markedTools, forwardedResultIds, appendTextBlock }: UserEnvelopeContext,
+  envelope: ClaudeUserEnvelope,
+): void {
+  if (!resultForwardingEnabled()) return;
+  // Sub-agent envelopes are the CLI's internal business, same as in
+  // handleAssistantEnvelope.
+  if (envelope.parent_tool_use_id) return;
+  const envelopeBlocks = envelope.message?.content ?? [];
+  // `tool_use_result` sits on the ENVELOPE, not on the block, so it can
+  // only be attributed when the envelope carries a single result. In every
+  // capture so far the CLI sends one per envelope; a batched envelope from
+  // some future version degrades to the text-only summary rather than
+  // labelling one tool's outcome with another's metrics.
+  const results = envelopeBlocks.filter((block: any) => block.type === "tool_result");
+  const detail = results.length === 1 ? envelope.tool_use_result : undefined;
+
+  for (const block of envelopeBlocks) {
+    if (block.type !== "tool_result" || !block.tool_use_id) continue;
+    // Only results for tools that got a call marker. Everything else is
+    // either a handoff replay (pi executed it and has the real result —
+    // rendering it again would double it) or noise from an envelope this
+    // bridge never saw.
+    const tool = markedTools.get(block.tool_use_id);
+    if (!tool) continue;
+    if (forwardedResultIds.has(block.tool_use_id)) continue;
+    forwardedResultIds.add(block.tool_use_id);
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = buildResultPayload({
+        tool,
+        isError: block.is_error === true,
+        text: resultText(block.content),
+        detail,
+      });
+    } catch {
+      // A marker must never cost a turn. Status alone still pairs.
+      payload = { status: block.is_error ? "error" : "ok", tool };
+    }
+    appendTextBlock(
+      `[Claude Code · result #${block.tool_use_id} ${JSON.stringify(payload)}]`,
+    );
+  }
+}
+
+type AssistantEnvelopeContext = {
+  markedTools: Map<string, string>;
+  appendTextBlock: (text: string) => void;
+};
+
+/** An assistant envelope: emit a marker for each CLI-executed tool call. */
+function applyAssistantEnvelope(
+  { markedTools, appendTextBlock }: AssistantEnvelopeContext,
+  envelope: ClaudeAssistantEnvelope,
+): void {
+  // Sub-agent envelopes are the CLI's internal business.
+  if (envelope.parent_tool_use_id) return;
+  for (const block of envelope.message?.content ?? []) {
+    if (block.type !== "tool_use" || !block.name || !block.id) continue;
+    // Handoff tools already streamed through the SSE path as real pi
+    // tool calls — markers are for everything the CLI executes itself,
+    // which in observer mode includes the built-in file tools.
+    if (isHandoffClaudeTool(block.name)) continue;
+    if (markedTools.has(block.id)) continue;
+    markedTools.set(block.id, block.name);
+
+    let argsPayload = "";
+    try {
+      argsPayload = buildCallPayload(block.name, block.input);
+    } catch {
+      /* unserializable input — marker still names the tool */
+    }
+    // WIRE CONTRACT — front-ends parse these strings.
+    //
+    //   [Claude Code · <ToolName>]              (no arguments)
+    //   [Claude Code · <ToolName> <argsJson>]
+    //
+    // With PI_CLAUDE_CLI_TOOL_RESULTS=1 — a host opt-in, because a
+    // front-end that has not learned these shapes renders them as prose —
+    // the call marker gains an id tag and a result marker follows when the
+    // CLI reports the tool's outcome (`handleUserEnvelope`):
+    //
+    //   [Claude Code · <ToolName> #<toolUseId> <argsJson>]
+    //   [Claude Code · result #<toolUseId> <payloadJson>]
+    //
+    // BOTH payloads are complete, parseable JSON — since 0.8.0 for the
+    // call payload, which used to be `JSON.stringify(input)` cut at 120
+    // characters and so was usually invalid and usually missing the end of
+    // the one value worth reading. `src/tool-markers.ts` explains what
+    // that cost and what it selects instead.
+    //
+    // Phosphor matches /^\[Claude Code · ([^\s\]]+)(?:\s+([\s\S]*))?\]$/ to
+    // render these as activity rows instead of prose; anything it cannot
+    // match falls back to being shown as raw markdown, which is what this
+    // marker existed to avoid. Change the shapes only together with the
+    // consumers.
+    const idTag = resultForwardingEnabled() ? ` #${block.id}` : "";
+    const args = argsPayload ? ` ${argsPayload}` : "";
+    appendTextBlock(`[Claude Code · ${block.name}${idTag}${args}]`);
+  }
+}
+
 export function createEventBridge(
   stream: AssistantMessageEventStream,
   model: Model<any>,
@@ -189,7 +790,7 @@ export function createEventBridge(
     timestamp: Date.now(),
   };
 
-  let started = false;
+  const started = { value: false };
 
   // One subprocess run is a full agentic EPISODE: N API calls ("cycles")
   // with CLI-side tool executions between them. SSE content_block indexes
@@ -202,7 +803,8 @@ export function createEventBridge(
     cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0,
   };
-  let cycleUsage: ClaudeUsage = {};
+  /** Boxed: handlers that reassign the whole cycle must share one binding. */
+  const cycleUsage = { value: {} as ClaudeUsage };
   /**
    * Context size of the most recent cycle — what the model actually saw on
    * its last call, which is NOT the episode's summed usage.
@@ -219,7 +821,7 @@ export function createEventBridge(
    * So the four component figures stay cumulative — they are what gets
    * billed — and `totalTokens` carries the last cycle's context instead.
    */
-  let lastCycleContext = 0;
+  const lastCycle = { tokens: 0 };
   /**
    * Tool ids already surfaced as markers (the envelope arrives once per
    * block), mapped to the tool each call named — the result marker reports
@@ -246,55 +848,26 @@ export function createEventBridge(
    * model, and slightly off for a cheaper helper model — a known skew worth
    * far less than the tokens it stops hiding.
    */
-  function sumModelUsage(
-    modelUsage: Record<string, ClaudeModelUsage> | undefined,
-  ): ClaudeUsage | undefined {
-    if (!modelUsage) return undefined;
-    const entries = Object.values(modelUsage);
-    if (entries.length === 0) return undefined;
-    const total = {
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    };
-    for (const entry of entries) {
-      total.input_tokens += entry.inputTokens ?? 0;
-      total.output_tokens += entry.outputTokens ?? 0;
-      total.cache_read_input_tokens += entry.cacheReadInputTokens ?? 0;
-      total.cache_creation_input_tokens += entry.cacheCreationInputTokens ?? 0;
-    }
-    return total;
-  }
-
   /** Prompt size of one cycle: everything the model read, excluding output. */
-  function contextOf(usage: ClaudeUsage): number {
-    return (
-      (usage.input_tokens ?? 0) +
-      (usage.cache_read_input_tokens ?? 0) +
-      (usage.cache_creation_input_tokens ?? 0)
-    );
-  }
-
   function recomputeUsage(): void {
     output.usage.input =
-      cumulativeUsage.input_tokens + (cycleUsage.input_tokens ?? 0);
+      cumulativeUsage.input_tokens + (cycleUsage.value.input_tokens ?? 0);
     output.usage.output =
-      cumulativeUsage.output_tokens + (cycleUsage.output_tokens ?? 0);
+      cumulativeUsage.output_tokens + (cycleUsage.value.output_tokens ?? 0);
     output.usage.cacheRead =
       cumulativeUsage.cache_read_input_tokens +
-      (cycleUsage.cache_read_input_tokens ?? 0);
+      (cycleUsage.value.cache_read_input_tokens ?? 0);
     output.usage.cacheWrite =
       cumulativeUsage.cache_creation_input_tokens +
-      (cycleUsage.cache_creation_input_tokens ?? 0);
+      (cycleUsage.value.cache_creation_input_tokens ?? 0);
     // Latch the newest cycle we have numbers for. `applyResult` clears
     // cycleUsage, so a zero here means "no fresher figure", never "empty
     // context" — the last latched value must survive.
-    const cycleContext = contextOf(cycleUsage);
-    if (cycleContext > 0) lastCycleContext = cycleContext;
+    const cycleContext = contextOf(cycleUsage.value);
+    if (cycleContext > 0) lastCycle.tokens = cycleContext;
     output.usage.totalTokens =
-      lastCycleContext > 0
-        ? lastCycleContext
+      lastCycle.tokens > 0
+        ? lastCycle.tokens
         : output.usage.input +
           output.usage.output +
           output.usage.cacheRead +
@@ -307,48 +880,31 @@ export function createEventBridge(
    * blocks carry their own contentIndex, so appended blocks (markers, the
    * final-answer safety net) need no relationship to any SSE index.
    */
-  function appendTextBlock(text: string): void {
-    if (!started) {
-      stream.push({ type: "start", partial: output });
-      started = true;
-    }
-    const contentIndex = output.content.length;
-    blocks.push({ type: "text", text, index: -1, cycle: -1, contentIndex });
-    output.content.push({ type: "text" as const, text: "" });
-    stream.push({ type: "text_start", contentIndex, partial: output });
-    (output.content[contentIndex] as TextContent).text = text;
-    stream.push({
-      type: "text_delta",
-      contentIndex,
-      delta: text,
-      partial: output,
-    });
-    stream.push({
-      type: "text_end",
-      contentIndex,
-      content: text,
-      partial: output,
-    });
+  const appendTextBlock = (text: string) =>
+    appendTextBlockContext({ blocks, output, started, stream }, text);
+
+  /** New cycle: bank the finished cycle's usage, then reset the per-cycle one. */
+  function bankCycle(): void {
+    cumulativeUsage.input_tokens += cycleUsage.value.input_tokens ?? 0;
+    cumulativeUsage.output_tokens += cycleUsage.value.output_tokens ?? 0;
+    cumulativeUsage.cache_read_input_tokens +=
+      cycleUsage.value.cache_read_input_tokens ?? 0;
+    cumulativeUsage.cache_creation_input_tokens +=
+      cycleUsage.value.cache_creation_input_tokens ?? 0;
+    cycleUsage.value = {};
+    cycle++;
   }
 
   function handleEvent(event: ClaudeApiEvent): void {
     // Emit start event on first message — tells pi to begin incremental rendering
-    if (!started) {
+    if (!started.value) {
       stream.push({ type: "start", partial: output });
-      started = true;
+      started.value = true;
     }
 
     switch (event.type) {
       case "message_start":
-        // New cycle: bank the finished cycle's usage before resetting.
-        cumulativeUsage.input_tokens += cycleUsage.input_tokens ?? 0;
-        cumulativeUsage.output_tokens += cycleUsage.output_tokens ?? 0;
-        cumulativeUsage.cache_read_input_tokens +=
-          cycleUsage.cache_read_input_tokens ?? 0;
-        cumulativeUsage.cache_creation_input_tokens +=
-          cycleUsage.cache_creation_input_tokens ?? 0;
-        cycleUsage = {};
-        cycle++;
+        bankCycle();
         handleMessageStart(event);
         break;
       case "content_block_start":
@@ -373,87 +929,13 @@ export function createEventBridge(
   function handleMessageStart(event: ClaudeApiEvent): void {
     const usage = event.message?.usage;
     if (usage) {
-      cycleUsage = { ...usage };
+      cycleUsage.value = { ...usage };
       recomputeUsage();
     }
   }
 
-  function handleContentBlockStart(event: ClaudeApiEvent): void {
-    const blockType = event.content_block?.type;
-
-    if (blockType === "text") {
-      const block: TrackedContentBlock = {
-        type: "text",
-        text: "",
-        index: event.index ?? 0,
-        cycle,
-        contentIndex: output.content.length,
-      };
-      blocks.push(block);
-      output.content.push({ type: "text" as const, text: "" });
-
-      stream.push({
-        type: "text_start",
-        contentIndex: block.contentIndex,
-        partial: output,
-      });
-    } else if (blockType === "thinking") {
-      // Deliberately NOT materialized yet. Several Claude models (verified:
-      // fable-5, opus-5, sonnet-5 at effort medium; haiku-4-5 is the
-      // exception) stream ENCRYPTED thinking: a multi-kilobyte
-      // signature_delta with no thinking_delta at all. Materializing on
-      // start produced a thinking block with no text, which front-ends
-      // faithfully rendered as an empty "thought". The block is created on
-      // the first plaintext delta and dropped at block_stop if none arrives.
-      const block: TrackedContentBlock = {
-        type: "thinking",
-        text: "",
-        index: event.index ?? 0,
-        cycle,
-        contentIndex: -1,
-      };
-      blocks.push(block);
-    } else if (blockType === "tool_use") {
-      const claudeName = event.content_block!.name!;
-
-      // Observer mode: the CLI executes its own tools (built-ins, WebSearch,
-      // user MCP, Task). Those surface as marker text via the envelope path,
-      // never as pi toolCall blocks. Only HANDOFF tools — custom pi tools
-      // behind the schema-only MCP server — become toolCalls for pi's loop.
-      if (!isHandoffClaudeTool(claudeName)) {
-        return;
-      }
-
-      const piName = mapClaudeToolNameToPi(claudeName);
-      const id = event.content_block!.id!;
-
-      const block: TrackedToolBlock = {
-        type: "tool_use",
-        index: event.index ?? 0,
-        cycle,
-        contentIndex: output.content.length,
-        id,
-        name: piName,
-        claudeName,
-        arguments: {},
-        partialJson: "",
-      };
-      blocks.push(block);
-      output.content.push({
-        type: "toolCall" as const,
-        id,
-        name: piName,
-        arguments: {},
-      } as ToolCall);
-
-      stream.push({
-        type: "toolcall_start",
-        contentIndex: block.contentIndex,
-        partial: output,
-      });
-    }
-    // Unknown block types silently ignored
-  }
+  const handleContentBlockStart = (event: ClaudeApiEvent) =>
+    applyContentBlockStart({ blocks, output, cycle, stream }, event);
 
   /** Locate the tracked block for this cycle's SSE index. */
   function trackedFor(event: ClaudeApiEvent): TrackedBlock | undefined {
@@ -483,284 +965,23 @@ export function createEventBridge(
     });
   }
 
-  function handleContentBlockDelta(event: ClaudeApiEvent): void {
-    const deltaType = event.delta?.type;
-    const block = trackedFor(event);
-    if (!block) return;
+  const handleContentBlockDelta = (event: ClaudeApiEvent) => applyContentBlockDelta(deltaContext, event);
 
-    if (deltaType === "text_delta" && event.delta!.text != null) {
-      if (block.type !== "text") return;
-      block.text += event.delta!.text;
-      (output.content[block.contentIndex] as TextContent).text = block.text;
-      stream.push({
-        type: "text_delta",
-        contentIndex: block.contentIndex,
-        delta: event.delta!.text,
-        partial: output,
-      });
-    } else if (
-      deltaType === "thinking_delta" &&
-      event.delta!.thinking != null
-    ) {
-      if (block.type !== "thinking") return;
-      // Empty thinking_delta events accompany encrypted thinking (verified
-      // on sonnet-5): they carry no plaintext, so they must not bring a
-      // thinking block into existence.
-      if (block.contentIndex === -1) {
-        if (event.delta!.thinking.length === 0) return;
-        materializeThinking(block);
-      }
-      block.text += event.delta!.thinking;
-      (output.content[block.contentIndex] as ThinkingContent).thinking =
-        block.text;
-      stream.push({
-        type: "thinking_delta",
-        contentIndex: block.contentIndex,
-        delta: event.delta!.thinking,
-        partial: output,
-      });
-    } else if (
-      deltaType === "input_json_delta" &&
-      event.delta!.partial_json != null
-    ) {
-      if (block.type !== "tool_use") return;
-      block.partialJson += event.delta!.partial_json;
-      try {
-        const parsed = JSON.parse(block.partialJson);
-        // Only an object may overwrite the arguments. A payload that parses
-        // to null/array/scalar would otherwise land on the streaming partial
-        // and be shown to the user as the tool's arguments.
-        if (isArgumentObject(parsed)) {
-          block.arguments = parsed;
-          (output.content[block.contentIndex] as any).arguments =
-            block.arguments;
-        }
-      } catch {
-        // Partial JSON not yet parseable -- keep previous arguments
-      }
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: block.contentIndex,
-        delta: event.delta!.partial_json,
-        partial: output,
-      });
-    } else if (
-      deltaType === "signature_delta" &&
-      event.delta!.signature != null
-    ) {
-      if (block.type !== "thinking") return;
-      if (block.contentIndex === -1) {
-        // Signature before (or without) any plaintext: hold it in case
-        // plaintext follows. If it never does, the block is dropped.
-        block.pendingSignature =
-          (block.pendingSignature ?? "") + event.delta!.signature;
-        return;
-      }
-      const contentBlock = output.content[
-        block.contentIndex
-      ] as ThinkingContent;
-      contentBlock.thinkingSignature =
-        (contentBlock.thinkingSignature || "") + event.delta!.signature;
-    }
-  }
+  const handleContentBlockStop = (event: ClaudeApiEvent) => applyContentBlockStop({ blocks, cycle, stream, output }, event);
 
-  function handleContentBlockStop(event: ClaudeApiEvent): void {
-    const idx = blocks.findIndex(
-      (b) => b.cycle === cycle && b.index === event.index,
-    );
-    if (idx === -1) return;
-    const block = blocks[idx];
-
-    // Encrypted thinking: signature only, no plaintext. Drop it rather than
-    // emit a content block with nothing to show.
-    if (block.type === "thinking" && block.contentIndex === -1) {
-      blocks.splice(idx, 1);
-      return;
-    }
-
-    // Clean up the tracking index from the block (no longer needed)
-    delete (block as any).index;
-
-    if (block.type === "text") {
-      stream.push({
-        type: "text_end",
-        contentIndex: block.contentIndex,
-        content: block.text,
-        partial: output,
-      });
-    } else if (block.type === "thinking") {
-      stream.push({
-        type: "thinking_end",
-        contentIndex: block.contentIndex,
-        content: block.text,
-        partial: output,
-      });
-    } else if (block.type === "tool_use") {
-      // Arguments stream in as input_json_delta events. A call with NO
-      // arguments -- mcp({}), artifact_list() -- sends no deltas at all, so
-      // the accumulator is still "" here. JSON.parse("") throws, and handing
-      // pi the raw "" made it reject the call against the tool's schema with
-      // `root: must be object`. Empty means {}, not malformed: that is the
-      // difference between "the model sent no arguments" and "the arguments
-      // did not arrive intact".
-      //
-      // Anything that is non-empty but unusable still passes through as its
-      // raw string, on purpose. That text is the only evidence of what
-      // actually arrived, and coercing it to {} would turn a visible failure
-      // into a tool that silently ran with no arguments.
-      let finalArgs: Record<string, unknown> | string;
-      if (block.partialJson.trim() === "") {
-        finalArgs = translateClaudeArgsToPi(block.claudeName, {});
-      } else {
-        try {
-          const parsed = JSON.parse(block.partialJson);
-          finalArgs = isArgumentObject(parsed)
-            ? translateClaudeArgsToPi(block.claudeName, parsed)
-            : block.partialJson;
-        } catch {
-          finalArgs = block.partialJson;
-        }
-      }
-
-      (output.content[block.contentIndex] as any).arguments = finalArgs;
-
-      // ToolCall.arguments is typed as Record<string, any> in pi-ai, but we
-      // intentionally emit a raw string when JSON parse fails completely.
-      // Pi handles string arguments gracefully at runtime.
-      const toolCall = {
-        type: "toolCall" as const,
-        id: block.id,
-        name: block.name,
-        arguments: finalArgs,
-      } as ToolCall;
-
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: block.contentIndex,
-        toolCall,
-        partial: output,
-      });
-    }
-  }
-
-  function handleMessageDelta(event: ClaudeApiEvent): void {
-    if (event.delta?.stop_reason) {
-      // The LAST cycle's stop reason is the episode's stop reason.
-      output.stopReason = mapStopReason(event.delta.stop_reason);
-    }
-
-    const usage = event.usage;
-    if (usage) {
-      // message_delta carries the cycle's final numbers — overwrite within
-      // the cycle, never across cycles (those are banked at message_start).
-      if (usage.input_tokens != null)
-        cycleUsage.input_tokens = usage.input_tokens;
-      if (usage.output_tokens != null)
-        cycleUsage.output_tokens = usage.output_tokens;
-      if (usage.cache_read_input_tokens != null)
-        cycleUsage.cache_read_input_tokens = usage.cache_read_input_tokens;
-      if (usage.cache_creation_input_tokens != null)
-        cycleUsage.cache_creation_input_tokens =
-          usage.cache_creation_input_tokens;
-      recomputeUsage();
-    }
-  }
+  const handleMessageDelta = (event: ClaudeApiEvent) =>
+    applyMessageDelta({ output, cycleUsage, recomputeUsage }, event);
 
   function handleMessageStop(): void {
     // No-op: done event is pushed by the provider after readline closes.
     // Pushing done here (synchronously) prevents pi from executing tools.
   }
 
-  function handleAssistantEnvelope(envelope: ClaudeAssistantEnvelope): void {
-    // Sub-agent envelopes are the CLI's internal business.
-    if (envelope.parent_tool_use_id) return;
-    for (const block of envelope.message?.content ?? []) {
-      if (block.type !== "tool_use" || !block.name || !block.id) continue;
-      // Handoff tools already streamed through the SSE path as real pi
-      // tool calls — markers are for everything the CLI executes itself,
-      // which in observer mode includes the built-in file tools.
-      if (isHandoffClaudeTool(block.name)) continue;
-      if (markedTools.has(block.id)) continue;
-      markedTools.set(block.id, block.name);
+  const handleAssistantEnvelope = (envelope: ClaudeAssistantEnvelope) =>
+    applyAssistantEnvelope({ markedTools, appendTextBlock }, envelope);
 
-      let argsPayload = "";
-      try {
-        argsPayload = buildCallPayload(block.name, block.input);
-      } catch {
-        /* unserializable input — marker still names the tool */
-      }
-      // WIRE CONTRACT — front-ends parse these strings.
-      //
-      //   [Claude Code · <ToolName>]              (no arguments)
-      //   [Claude Code · <ToolName> <argsJson>]
-      //
-      // With PI_CLAUDE_CLI_TOOL_RESULTS=1 — a host opt-in, because a
-      // front-end that has not learned these shapes renders them as prose —
-      // the call marker gains an id tag and a result marker follows when the
-      // CLI reports the tool's outcome (`handleUserEnvelope`):
-      //
-      //   [Claude Code · <ToolName> #<toolUseId> <argsJson>]
-      //   [Claude Code · result #<toolUseId> <payloadJson>]
-      //
-      // BOTH payloads are complete, parseable JSON — since 0.8.0 for the
-      // call payload, which used to be `JSON.stringify(input)` cut at 120
-      // characters and so was usually invalid and usually missing the end of
-      // the one value worth reading. `src/tool-markers.ts` explains what
-      // that cost and what it selects instead.
-      //
-      // Phosphor matches /^\[Claude Code · ([^\s\]]+)(?:\s+([\s\S]*))?\]$/ to
-      // render these as activity rows instead of prose; anything it cannot
-      // match falls back to being shown as raw markdown, which is what this
-      // marker existed to avoid. Change the shapes only together with the
-      // consumers.
-      const idTag = resultForwardingEnabled() ? ` #${block.id}` : "";
-      const args = argsPayload ? ` ${argsPayload}` : "";
-      appendTextBlock(`[Claude Code · ${block.name}${idTag}${args}]`);
-    }
-  }
-
-  function handleUserEnvelope(envelope: ClaudeUserEnvelope): void {
-    if (!resultForwardingEnabled()) return;
-    // Sub-agent envelopes are the CLI's internal business, same as in
-    // handleAssistantEnvelope.
-    if (envelope.parent_tool_use_id) return;
-    const blocks = envelope.message?.content ?? [];
-    // `tool_use_result` sits on the ENVELOPE, not on the block, so it can
-    // only be attributed when the envelope carries a single result. In every
-    // capture so far the CLI sends one per envelope; a batched envelope from
-    // some future version degrades to the text-only summary rather than
-    // labelling one tool's outcome with another's metrics.
-    const results = blocks.filter((block: any) => block.type === "tool_result");
-    const detail = results.length === 1 ? envelope.tool_use_result : undefined;
-
-    for (const block of blocks) {
-      if (block.type !== "tool_result" || !block.tool_use_id) continue;
-      // Only results for tools that got a call marker. Everything else is
-      // either a handoff replay (pi executed it and has the real result —
-      // rendering it again would double it) or noise from an envelope this
-      // bridge never saw.
-      const tool = markedTools.get(block.tool_use_id);
-      if (!tool) continue;
-      if (forwardedResultIds.has(block.tool_use_id)) continue;
-      forwardedResultIds.add(block.tool_use_id);
-
-      let payload: Record<string, unknown>;
-      try {
-        payload = buildResultPayload({
-          tool,
-          isError: block.is_error === true,
-          text: resultText(block.content),
-          detail,
-        });
-      } catch {
-        // A marker must never cost a turn. Status alone still pairs.
-        payload = { status: block.is_error ? "error" : "ok", tool };
-      }
-      appendTextBlock(
-        `[Claude Code · result #${block.tool_use_id} ${JSON.stringify(payload)}]`,
-      );
-    }
-  }
+  const handleUserEnvelope = (envelope: ClaudeUserEnvelope) =>
+    applyUserEnvelope({ markedTools, forwardedResultIds, appendTextBlock }, envelope);
 
   /**
    * Normalize the CLI's compaction record from either spelling (see
@@ -768,108 +989,16 @@ export function createEventBridge(
    * figure; anything else is "not reported" rather than a zero the host
    * would then believe.
    */
-  function readCompactMetadata(envelope: ClaudeCompactBoundary): {
-    trigger?: string;
-    preTokens?: number;
-    postTokens?: number;
-    durationMs?: number;
-  } {
-    const raw = (envelope.compact_metadata ??
-      envelope.compactMetadata ??
-      {}) as Record<string, unknown>;
-    const num = (...keys: string[]): number | undefined => {
-      for (const key of keys) {
-        const value = raw[key];
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-          return value;
-        }
-      }
-      return undefined;
-    };
-    return {
-      trigger: typeof raw.trigger === "string" ? raw.trigger : undefined,
-      preTokens: num("pre_tokens", "preTokens"),
-      postTokens: num("post_tokens", "postTokens"),
-      durationMs: num("duration_ms", "durationMs"),
-    };
-  }
+  const handleCompactBoundary = (envelope: ClaudeCompactBoundary) =>
+    applyCompactBoundary(
+      { cumulativeUsage, cycleUsage, lastCycle, recomputeUsage, appendTextBlock },
+      envelope,
+    );
 
-  function handleCompactBoundary(envelope: ClaudeCompactBoundary): void {
-    const meta = readCompactMetadata(envelope);
+  const applyResult = (result: ClaudeResultMessage) =>
+    applyResultEnvelope({ output, cumulativeUsage, cycleUsage, recomputeUsage, appendTextBlock }, result);
 
-    // The context the model holds NOW is the compacted one. The CLI's
-    // summarization pass is an API call whose prompt is the entire
-    // pre-compaction conversation, and it is the last `message_start` this
-    // bridge sees before the CLI carries on — so left alone, the latch keeps
-    // that prompt as "the last cycle". Captured 2026-09-16: pi was told
-    // 316,760 for a session the CLI had just cut to 37,239, and compacted its
-    // own record on the phantom two minutes later. Bank the finished cycle
-    // first so recomputeUsage() cannot re-latch it.
-    if (meta.postTokens !== undefined && meta.postTokens > 0) {
-      cumulativeUsage.input_tokens += cycleUsage.input_tokens ?? 0;
-      cumulativeUsage.output_tokens += cycleUsage.output_tokens ?? 0;
-      cumulativeUsage.cache_read_input_tokens +=
-        cycleUsage.cache_read_input_tokens ?? 0;
-      cumulativeUsage.cache_creation_input_tokens +=
-        cycleUsage.cache_creation_input_tokens ?? 0;
-      cycleUsage = {};
-      lastCycleContext = meta.postTokens;
-      recomputeUsage();
-    }
-
-    // Same wire shape as every other marker (`[Claude Code · Name {json}]`),
-    // no `#id` tag because nothing pairs with it. Only reported figures go
-    // in: a host must not read an absent `postTokens` as zero.
-    const payload: Record<string, unknown> = {};
-    if (meta.trigger !== undefined) payload.trigger = meta.trigger;
-    if (meta.preTokens !== undefined) payload.preTokens = meta.preTokens;
-    if (meta.postTokens !== undefined) payload.postTokens = meta.postTokens;
-    if (meta.durationMs !== undefined) payload.durationMs = meta.durationMs;
-    appendTextBlock(`[Claude Code · compact ${JSON.stringify(payload)}]`);
-  }
-
-  function applyResult(result: ClaudeResultMessage): void {
-    // Authoritative spend for the whole episode. `modelUsage` is preferred
-    // over `usage` because `usage` is the MAIN AGENT ONLY: sub-agents run
-    // inside the CLI and never appear in the parent stream, so their tokens
-    // — often the majority — were simply missing from what the host billed.
-    // Same for helper models like the haiku auto-titler.
-    //
-    // Measured 2026-08-27: a lane's turn reported $2.34 while seven
-    // sub-agents spent 28.6M cache-read tokens on top of it, a 10x
-    // under-report. On a captured single-sub-agent episode `modelUsage`
-    // summed to exactly main + sub-agent (102,641 cache-read / 56,920
-    // cache-write), which is why it is trusted here.
-    const totals = sumModelUsage(result.modelUsage) ?? result.usage;
-    if (totals) {
-      cumulativeUsage.input_tokens =
-        totals.input_tokens ?? cumulativeUsage.input_tokens;
-      cumulativeUsage.output_tokens =
-        totals.output_tokens ?? cumulativeUsage.output_tokens;
-      cumulativeUsage.cache_read_input_tokens =
-        totals.cache_read_input_tokens ??
-        cumulativeUsage.cache_read_input_tokens;
-      cumulativeUsage.cache_creation_input_tokens =
-        totals.cache_creation_input_tokens ??
-        cumulativeUsage.cache_creation_input_tokens;
-      cycleUsage = {};
-      recomputeUsage();
-    }
-
-    // Safety net: whatever ended the SSE stream early, the result envelope
-    // carries the episode's final answer — never let it be lost.
-    const finalText = (result.result ?? "").trim();
-    if (finalText) {
-      const streamedText = output.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
-      const tail = finalText.slice(-Math.min(finalText.length, 60));
-      if (!streamedText.includes(tail)) {
-        appendTextBlock(finalText);
-      }
-    }
-  }
+  const deltaContext: DeltaContext = { output, stream, materializeThinking, trackedFor };
 
   return {
     handleEvent,
