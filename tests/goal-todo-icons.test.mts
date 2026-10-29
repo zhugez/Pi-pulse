@@ -26,6 +26,7 @@ import {
   renderExpandedDashboard,
 } from "../extensions/goal/widgets/goal-dashboard-renderer.ts";
 import { buildGoalStatusText, PLAIN_THEME } from "../extensions/goal/goal-status.ts";
+import { TASK_MARK, taskMark } from "../extensions/goal/goal-format.ts";
 import {
   ACTION_GLYPH,
   STATUS_GLYPH,
@@ -48,7 +49,8 @@ const BLOCK = /[█▓▒░]/;
 const PROGRESS_BAR = /\[[█░]+\]/g;
 const NERD_FONT = /[\ue000-\uf8ff]|[\u{f0000}-\u{f1fff}]/u;
 
-const WIDTHS = [38, 50, 80, 100, 120];
+// Cover every integer width in the supported test range, including layout boundaries.
+const WIDTHS = Array.from({ length: 83 }, (_, i) => i + 38);
 
 function dashboardModel() {
   return {
@@ -159,7 +161,12 @@ test("goal and todo surfaces use Nerd Font markers only", () => {
 });
 
 test("status and action glyph sets are Nerd Font, one cell each", () => {
-  for (const glyph of [...Object.values(STATUS_GLYPH), ...Object.values(ACTION_GLYPH)]) {
+  assert.deepEqual(STATUS_GLYPH, { pending: "", in_progress: "", completed: "", deleted: "" });
+  assert.deepEqual(TASK_MARK, { pending: "", complete: "", skipped: "" });
+  for (const status of ["pending", "complete", "skipped"] as const) {
+    assert.equal(taskMark(status), TASK_MARK[status]);
+  }
+  for (const glyph of [...Object.values(STATUS_GLYPH), ...Object.values(TASK_MARK), ...Object.values(ACTION_GLYPH)]) {
     assert.match(glyph, NERD_FONT, `expected a Nerd Font glyph, got ${JSON.stringify(glyph)}`);
     assert.equal(visibleWidth(glyph), 1, `${JSON.stringify(glyph)} must measure one cell`);
   }

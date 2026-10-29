@@ -1,16 +1,14 @@
 import { goalDialogControls } from "./goal-dialog-controls.ts";
 import { TASK_MARK } from "./goal-format.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Editor, type EditorTheme, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Editor, type EditorTheme, visibleWidth } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "./widgets/text-cache.ts";
-/** Colour for a task marker: complete → success, skipped → muted, anything
- *  else (pending, or a legacy bracket) → warning. Accepts both the Nerd Font
- *  markers and the legacy `[x]`/`[~]`/`[ ]` brackets that older drafts and
- *  model output still contain. */
-function markColor(marker: string): "success" | "muted" | "warning" {
-	if (marker === TASK_MARK.complete || marker === "[x]") return "success";
-	if (marker === TASK_MARK.skipped || marker === "[~]") return "muted";
-	return "warning";
+/** Normalize legacy task brackets to the Nerd Font icon and semantic color.
+ * Other bracketed context is preserved rather than interpreted as a task. */
+function taskPresentation(marker: string): { color: "success" | "muted" | "warning"; symbol: string } {
+	if (marker === TASK_MARK.complete || marker === "[x]") return { color: "success", symbol: TASK_MARK.complete };
+	if (marker === TASK_MARK.skipped || marker === "[~]") return { color: "muted", symbol: TASK_MARK.skipped };
+	return { color: "warning", symbol: marker === "[ ]" ? TASK_MARK.pending : marker };
 }
 
 
@@ -441,6 +439,7 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		// for IME input (pi docs/tui.md — Focusable Interface).
 		let dialogFocused = false;
 		let cachedLines: string[] | undefined;
+		let cachedWidth: number | undefined;
 		let optionsStartIndex = -1;
 		// §options-scroll viewport state (select-mode + submit tabs only).
 		let scrollTop = 0;
@@ -768,7 +767,8 @@ function advanceAfterAnswer() {
 		}
 
 			function render(width: number): string[] {
-			if (cachedLines) return cachedLines;
+			if (cachedLines && cachedWidth === width) return cachedLines;
+			cachedWidth = width;
 			const safeWidth = Math.max(20, width);
 			let lines: string[] = [];
 			const q = currentQuestion();
@@ -832,8 +832,8 @@ function advanceAfterAnswer() {
 							const pipeContent = trimmed.slice(1);
 							const innerWs = pipeContent.slice(0, pipeContent.length - pipeContent.trimStart().length);
 							const linePrefix = "│" + innerWs;
-							const color = markColor(bracket);
-							addWrappedPipe(linePrefix + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
+							const marker = taskPresentation(bracket);
+							addWrappedPipe(linePrefix + theme.fg(marker.color, marker.symbol) + sep + theme.fg("muted", rest));
 							continue;
 						}
 						// 3b. Key-value content (e.g. "│   Mode: Normal goal", "│   Auto-continue: yes")
@@ -874,8 +874,8 @@ function advanceAfterAnswer() {
 						const sep = checkMatch[2]!;
 						const rest = checkMatch[3]!;
 						const indent = rawLine.slice(0, rawLine.length - trimmed.length);
-						const color = markColor(bracket);
-						addWrapped(indent + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
+						const marker = taskPresentation(bracket);
+						addWrapped(indent + theme.fg(marker.color, marker.symbol) + sep + theme.fg("muted", rest));
 						continue;
 					}
 

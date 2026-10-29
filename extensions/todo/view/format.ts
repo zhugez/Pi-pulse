@@ -83,7 +83,7 @@ export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): s
 		line += ` ${theme.fg("muted", `(${sanitizeTerminalText(t.activeForm)})`)}`;
 	}
 	if (t.blockedBy && t.blockedBy.length > 0) {
-		line += ` ${theme.fg("muted", `⛓ ${t.blockedBy.map((id) => `#${id}`).join(",")}`)}`;
+		line += ` ${theme.fg("muted", ` ${t.blockedBy.map((id) => `#${id}`).join(",")}`)}`;
 	}
 	return line;
 }
@@ -94,7 +94,7 @@ export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): s
  */
 export function formatCommandTaskLine(t: Task, glyph: string): string {
 	const form = t.status === "in_progress" && t.activeForm ? ` (${sanitizeTerminalText(t.activeForm)})` : "";
-	const block = t.blockedBy?.length ? `    ⛓ ${t.blockedBy.map((id) => `#${id}`).join(",")}` : "";
+	const block = t.blockedBy?.length ? `     ${t.blockedBy.map((id) => `#${id}`).join(",")}` : "";
 	return `  ${glyph} #${t.id} ${sanitizeTerminalText(t.subject)}${form}${block}`;
 }
 
