@@ -22,6 +22,9 @@ The collection currently includes two observability extensions, integrated model
 - **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
+- **Goal** — `/goal` conversational goal planning with tasks, subtasks, persistent progress, and an independent completion auditor.
+- **Todo** — a persistent `todo` tool, `/todos`, and a live task panel above the editor.
+- **Advisor** — an on-demand second opinion through `ask_advisor` and configurable review gates, on a separate model.
 
 ## Extension catalog
 
@@ -241,6 +244,37 @@ See the [Gemini Web Provider Reference](extensions/gemini-web/README.md) for com
 `/pnt-opt` is not a plain alias: before running the audit it takes a `crapper --no-coverage` snapshot of the scope and hands the audit the worst five functions by cyclomatic complexity, so "this is too complex" starts from a number instead of an opinion. Without `crapper` on `PATH` (or `PI_CRAPPER`), the command behaves exactly as before. The snapshot costs ~1.5 s on this repo's `extensions/`.
 
 The persisted default mode is stored in `~/.config/ponytail/config.json` (or `$XDG_CONFIG_HOME/ponytail/`).
+
+### Goal
+
+The agent drafts an objective and task plan with you, then keeps working while the goal is active; progress survives sessions. An optional completion auditor reviews the result against your completion requirements.
+
+```text
+/goal <objective>
+/goal-direct <objective>
+/sisyphus <ordered steps>
+/sisyphus-direct <objective>
+/goal-list  /goal-status  /goal-focus  /goal-unfocus
+/goal-pause  /goal-resume  /goal-tweak  /goal-clear  /goal-cancel
+/goal-refresh  /goal-recovery  /goal-settings
+```
+
+Tools: `get_goal`, `create_goal`, `update_goal`, `set_goal_tasks`, `update_goal_task`, `goal_question`, `goal_questionnaire`, `propose_goal_draft`.
+
+### Todo
+
+Adds a `todo` tool, `/todos`, and a live panel above the editor. The list is rebuilt from the conversation, so it survives `/reload` and compaction.
+
+### Advisor
+
+The Executor owns the work; the Advisor challenges assumptions, exposes risks, and suggests verification — it never runs tools. Configure a separate Advisor model before first use.
+
+```text
+/advisor  /advisor-manual  /advisor-models  /advisor-off
+/advisor-settings  /advisor-stats
+```
+
+Tools: `ask_advisor`, `record_advisor_outcome`.
 
 ## Install
 

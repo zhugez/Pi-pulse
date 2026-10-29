@@ -5,7 +5,10 @@ import type {
   ModelsStoreEntry,
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
-import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { ProviderModelConfig as PiModelConfig } from "@earendil-works/pi-coding-agent";
+
+/** Antigravity only registers chat models; narrow the pi 1.4 union so reasoning/thinkingLevelMap/maxTokens are addressable. */
+type ProviderModelConfig = Extract<PiModelConfig, { reasoning: boolean }>;
 import { getApiKey } from "../auth/oauth.js";
 import { listAccountApiKeys, recordAccountModelCatalog } from "../auth/accounts.js";
 import { DEFAULT_ENDPOINT, fetchAvailableModelsCatalog, parseApiKey } from "../client/client.js";

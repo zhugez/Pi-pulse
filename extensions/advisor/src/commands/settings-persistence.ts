@@ -1,0 +1,163 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+import {
+  getAdvisorSettings,
+  getPersistedModelRefs,
+  setAdvisorAgentsMdContextRef,
+  setAdvisorAutoLoopGateRef,
+  setAdvisorBlockOnBlockedRef,
+  setAdvisorCollapseResponsesRef,
+  setAdvisorCompletionGateRef,
+  setAdvisorCustomInvocationRef,
+  setAdvisorDisableSameModelRef,
+  setAdvisorEffortRef,
+  setAdvisorFailureGateRef,
+  setAdvisorFailureModeRef,
+  setAdvisorFallbackModelRef,
+  setAdvisorGitContextMaxCharsRef,
+  setAdvisorGitContextRef,
+  setAdvisorHerdrIntegrationRef,
+  setAdvisorJevClassifierRef,
+  setAdvisorJevDigestMaxCharsRef,
+  setAdvisorJevFilterEnabledRef,
+  setAdvisorJevFilterNoulMarginRef,
+  setAdvisorJevFilterOverrideWindowRef,
+  setAdvisorJevFilterSkipConfidenceRef,
+  setAdvisorJevTimeoutMsRef,
+  setAdvisorJevTurnGateEveryTurnsRef,
+  setAdvisorJevTurnGateNoulThresholdRef,
+  setAdvisorLoopThresholdRef,
+  setAdvisorMaxCallsPerSessionRef,
+  setAdvisorModelWhitelistRef,
+  setAdvisorOutcomeLoggingRef,
+  setAdvisorPlanGateRef,
+  setAdvisorRedactSecretsRef,
+  setAdvisorScoutEnabledRef,
+  setAdvisorScoutTimeoutMsRef,
+  setAdvisorSessionSummaryRef,
+  setAdvisorToolPoliciesRef,
+  setAdvisorToolResultMaxBytesRef,
+  setAdvisorToolResultMaxLinesRef,
+  setAdvisorToolsEnabledRef,
+  setAdvisorTrackedFileContentRef,
+  setAdvisorUntrackedContentRef,
+  setAlwaysOnRef,
+  setContextMaxCharsRef,
+  setShowUsageDetailsRef,
+  setShowUsageFooterRef,
+  setSimpleModeRef,
+} from "../config/state.ts";
+import { saveConfig, saveGlobalOutcomeLogging } from "../config/storage.ts";
+import {
+  DEFAULT_JEV_DIGEST_MAX_CHARS,
+  DEFAULT_JEV_FILTER_NOUL_MARGIN,
+  DEFAULT_JEV_FILTER_OVERRIDE_WINDOW,
+  DEFAULT_JEV_FILTER_SKIP_CONFIDENCE,
+  DEFAULT_JEV_TIMEOUT_MS,
+  DEFAULT_JEV_TURN_GATE_EVERY_TURNS,
+  DEFAULT_JEV_TURN_GATE_NOUL_THRESHOLD,
+  DEFAULT_SCOUT_TIMEOUT_MS,
+} from "../config/types.ts";
+import type { AdvisorSettings } from "../ui/types.ts";
+
+const applySessionSettings = (settings: AdvisorSettings) => {
+  setAdvisorEffortRef(
+    settings.effort === "Default (Model Default)" ? undefined : settings.effort
+  );
+  setContextMaxCharsRef(settings.contextMaxChars);
+  setAdvisorPlanGateRef(settings.planGate);
+  setAdvisorFallbackModelRef(settings.fallbackModel);
+  setAdvisorFailureGateRef(settings.failureGate);
+  setAdvisorCompletionGateRef(settings.completionGate);
+  setAdvisorDisableSameModelRef(settings.disableSameModel ?? true);
+  setAdvisorCollapseResponsesRef(settings.collapseResponses);
+  setAdvisorCustomInvocationRef(settings.customRule);
+  setAdvisorBlockOnBlockedRef(settings.blockOnBlocked ?? true);
+  setAdvisorAutoLoopGateRef(settings.autoLoopGate ?? true);
+  setAdvisorLoopThresholdRef(settings.loopThreshold ?? 3);
+  setAdvisorMaxCallsPerSessionRef(settings.maxCallsPerSession);
+  setAdvisorModelWhitelistRef(settings.modelWhitelist ?? []);
+  setAdvisorSessionSummaryRef(settings.sessionSummary ?? false);
+  setAdvisorScoutEnabledRef(settings.scoutEnabled ?? false);
+  setAdvisorScoutTimeoutMsRef(
+    settings.scoutTimeoutMs ?? DEFAULT_SCOUT_TIMEOUT_MS
+  );
+  setShowUsageDetailsRef(settings.showUsageDetails ?? true);
+  setShowUsageFooterRef(settings.showUsageFooter ?? false);
+  setSimpleModeRef(settings.simpleMode ?? false);
+  setAdvisorToolsEnabledRef(settings.advisorToolsEnabled ?? true);
+  setAlwaysOnRef(settings.alwaysOn ?? false);
+  setAdvisorFailureModeRef(settings.failureMode ?? "block-session");
+  setAdvisorHerdrIntegrationRef(settings.herdrIntegration ?? true);
+};
+
+const applyJevSettings = (settings: AdvisorSettings) => {
+  setAdvisorJevFilterEnabledRef(settings.jevFilterEnabled ?? false);
+  setAdvisorJevClassifierRef(settings.jevClassifier);
+  setAdvisorJevFilterSkipConfidenceRef(
+    settings.jevFilterSkipConfidence ?? DEFAULT_JEV_FILTER_SKIP_CONFIDENCE
+  );
+  setAdvisorJevFilterNoulMarginRef(
+    settings.jevFilterNoulMargin ?? DEFAULT_JEV_FILTER_NOUL_MARGIN
+  );
+  setAdvisorJevFilterOverrideWindowRef(
+    settings.jevFilterOverrideWindow ?? DEFAULT_JEV_FILTER_OVERRIDE_WINDOW
+  );
+  setAdvisorJevTimeoutMsRef(settings.jevTimeoutMs ?? DEFAULT_JEV_TIMEOUT_MS);
+  setAdvisorJevDigestMaxCharsRef(
+    settings.jevDigestMaxChars ?? DEFAULT_JEV_DIGEST_MAX_CHARS
+  );
+  setAdvisorJevTurnGateEveryTurnsRef(
+    settings.jevTurnGateEveryTurns ?? DEFAULT_JEV_TURN_GATE_EVERY_TURNS
+  );
+  setAdvisorJevTurnGateNoulThresholdRef(
+    settings.jevTurnGateNoulThreshold ?? DEFAULT_JEV_TURN_GATE_NOUL_THRESHOLD
+  );
+};
+
+const applyDisclosureSettings = (settings: AdvisorSettings) => {
+  setAdvisorToolResultMaxLinesRef(settings.toolResultMaxLines ?? 2000);
+  setAdvisorToolResultMaxBytesRef(settings.toolResultMaxBytes ?? 50 * 1024);
+  setAdvisorRedactSecretsRef(settings.redactSecrets ?? false);
+  setAdvisorGitContextRef(settings.gitContext ?? "summary");
+  setAdvisorGitContextMaxCharsRef(settings.gitContextMaxChars ?? 20_000);
+  setAdvisorToolPoliciesRef(settings.toolPolicies ?? {});
+  setAdvisorAgentsMdContextRef(settings.agentsMdContext ?? true);
+  setAdvisorTrackedFileContentRef(settings.trackedFileContent ?? false);
+  setAdvisorUntrackedContentRef(settings.untrackedContent ?? false);
+  setAdvisorOutcomeLoggingRef(settings.outcomeLogging ?? false);
+};
+
+const applyAdvisorSettings = (settings: AdvisorSettings) => {
+  applySessionSettings(settings);
+  applyJevSettings(settings);
+  applyDisclosureSettings(settings);
+};
+
+export interface SaveAdvisorSettingsOptions {
+  skipOutcomeLogging?: boolean;
+}
+
+export const saveAdvisorSettings = (
+  ctx: ExtensionContext,
+  settings: AdvisorSettings,
+  options: SaveAdvisorSettingsOptions = {}
+) => {
+  const previous = getAdvisorSettings();
+
+  try {
+    applyAdvisorSettings(settings);
+    const persisted = getPersistedModelRefs();
+    saveConfig(ctx, {
+      persistAdvisor: Boolean(persisted.advisor),
+      persistExecutor: Boolean(persisted.executor),
+    });
+
+    if (!options.skipOutcomeLogging) {
+      saveGlobalOutcomeLogging(settings.outcomeLogging ?? false);
+    }
+  } catch (error) {
+    applyAdvisorSettings(previous);
+    throw error;
+  }
+};

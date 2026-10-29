@@ -1,4 +1,7 @@
-import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { ProviderModelConfig as PiModelConfig } from "@earendil-works/pi-coding-agent";
+
+/** Antigravity only registers chat models; narrow the pi 1.4 union so reasoning/thinkingLevelMap/maxTokens are addressable. */
+type ProviderModelConfig = Extract<PiModelConfig, { reasoning: boolean }>;
 import { ThinkingEffort } from "../types/enums.js";
 import type { AntigravityRouting, ModelInfoRaw } from "../types/types.js";
 

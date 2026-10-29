@@ -1,0 +1,227 @@
+import {
+  advisorSessionSummaryRef,
+  advisorToolsEnabledRef,
+  getAdvisorMaxCallsPerSession,
+  isSimpleMode,
+} from "../config/state.ts";
+import { loadConfig } from "../config/storage.ts";
+import { advisorBudgetMessage } from "./budget-feedback.ts";
+import { reserveAdvisorCall } from "./gate-policy.ts";
+import { handleAutomaticGate } from "./loop-gate.ts";
+import {
+  advisorModelAccess,
+  sameModelAdvisorDisabled,
+} from "./model-access.ts";
+import { advisorInvocationGuidelines } from "./prompts.ts";
+import type { ToolRegistrationContext } from "./types.ts";
+
+const modelAccessBlock = (
+  toolName: string,
+  ctx: Parameters<typeof loadConfig>[0]
+): { block: true; reason: string } | undefined => {
+  const access = advisorModelAccess(ctx);
+
+  if (access.allowed || toolName !== "ask_advisor") {
+    return undefined;
+  }
+
+  return {
+    block: true,
+    reason: access.reason,
+  };
+};
+
+export const registerToolLifecycle = ({
+  herdrActivity,
+  herdrBlock,
+  pi,
+  reservedCalls,
+  runGate,
+  scoutStatus,
+  session,
+}: ToolRegistrationContext): void => {
+  // A throwing tool_call handler makes pi block that tool call (fail-safe), so
+  // a malformed advisor.json must not escape this handler: gating is skipped
+  // for that call and the failure is surfaced once per distinct outage. Config
+  // errors stay an Advisor concern instead of escalating into a session-wide
+  // outage.
+  let lastConfigErrorNotified: string | undefined;
+
+  const loadConfigOrSkipGating = (ctx: Parameters<typeof loadConfig>[0]) => {
+    try {
+      loadConfig(ctx);
+      lastConfigErrorNotified = undefined;
+
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (message !== lastConfigErrorNotified) {
+        lastConfigErrorNotified = message;
+
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Advisor gating skipped; configuration is invalid. ${message} Fix advisor.json.`,
+            "error"
+          );
+        }
+      }
+
+      return false;
+    }
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    session.resetTask();
+    reservedCalls.clear();
+    herdrBlock.clear();
+
+    if (ctx?.hasUI) {
+      ctx.ui.setStatus("advisor-usage", undefined);
+    }
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    // Hosts may omit systemPromptOptions; don't crash the extension on it.
+    const sections = event.systemPromptOptions?.sections;
+
+    if (!sections) {
+      return;
+    }
+
+    delete sections.advisor_invocation_settings;
+
+    if (!pi.getActiveTools().includes("ask_advisor")) {
+      return;
+    }
+
+    loadConfig(ctx);
+
+    if (
+      !advisorToolsEnabledRef ||
+      !advisorModelAccess(ctx).allowed ||
+      sameModelAdvisorDisabled(ctx)
+    ) {
+      return;
+    }
+
+    const guidelines = advisorInvocationGuidelines();
+
+    if (!isSimpleMode()) {
+      guidelines.push(
+        "Use the latest advisor-budget message for the current call allowance. Reserve calls for material decisions, repeated failures, or final review."
+      );
+    }
+
+    if (guidelines.length > 0) {
+      sections.advisor_invocation_settings = `Advisor invocation settings:\n${guidelines.map((rule) => `- ${rule}`).join("\n")}`;
+    }
+
+    return { message: advisorBudgetMessage(session) };
+  });
+
+  pi.on("input", () => {
+    session.clearFollowUps();
+  });
+
+  pi.on("tool_result", (event) => {
+    if (event.toolName !== "ask_advisor") {
+      session.advanceFollowUpToolCall();
+    }
+  });
+
+  pi.on("tool_call", (event, ctx) => {
+    if (session.blocked) {
+      return {
+        block: true,
+        reason: session.blockedReason ?? "Advisor session is blocked.",
+      };
+    }
+
+    const isAdvisorTool =
+      event.toolName === "ask_advisor" ||
+      event.toolName === "record_advisor_outcome";
+
+    if (isAdvisorTool && !advisorToolsEnabledRef) {
+      return {
+        block: true,
+        reason:
+          "Advisor tools are disabled. Enable them in /advisor-settings or run /advisor.",
+      };
+    }
+
+    if (!pi.getActiveTools().includes("ask_advisor")) {
+      return;
+    }
+
+    if (!loadConfigOrSkipGating(ctx)) {
+      // The ask_advisor execute path surfaces its own configuration errors as
+      // tool errors; every other tool must proceed without Advisor gating.
+      return;
+    }
+
+    if (isAdvisorTool && !advisorToolsEnabledRef) {
+      return {
+        block: true,
+        reason:
+          "Advisor tools are disabled. Enable them in /advisor-settings or run /advisor.",
+      };
+    }
+
+    if (sameModelAdvisorDisabled(ctx)) {
+      return;
+    }
+
+    const accessBlock = modelAccessBlock(event.toolName, ctx);
+
+    if (accessBlock) {
+      return accessBlock;
+    }
+
+    const reservation = reserveAdvisorCall(event, ctx, session, reservedCalls);
+
+    if (event.toolName === "ask_advisor") {
+      return reservation;
+    }
+
+    return handleAutomaticGate(
+      pi,
+      event,
+      ctx,
+      session,
+      runGate,
+      scoutStatus,
+      herdrActivity,
+      herdrBlock
+    );
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    // Any reservation still present never reached execute (for example because
+    // another handler blocked it or the turn was aborted).
+    reservedCalls.clear();
+    session.clearCallReservations();
+
+    if (isSimpleMode() || session.blocked || !advisorSessionSummaryRef) {
+      return;
+    }
+
+    const summary = session.summary(getAdvisorMaxCallsPerSession());
+
+    if (summary && ctx.hasUI) {
+      ctx.ui.notify(summary, "info");
+    }
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    reservedCalls.clear();
+    session.clearFollowUps();
+    session.clearCallReservations();
+    scoutStatus.clear(ctx);
+    herdrBlock.clear();
+
+    if (ctx?.hasUI) {
+      ctx.ui.setStatus("advisor-usage", undefined);
+    }
+  });
+};
