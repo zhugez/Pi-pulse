@@ -6,7 +6,10 @@ import { join } from 'node:path';
 // Python CLIs that self-bootstrap a venv, print a report on stdout, and use
 // non-zero exit codes to mean "the gate failed" rather than "the tool broke".
 
-export const MAX_OUTPUT_BYTES = 64 * 1024;
+// A whole-repo CRAP table is ~100 KB and a large repo can pass 1 MB; capping at
+// 64 KiB truncated real reports and execFile reported the truncation as a
+// failure, discarding every row. The cap only bounds memory, so it is generous.
+export const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 export type GateRunResult = {
   /** ok covers both "clean" and "gate failed"; the tool ran either way. */

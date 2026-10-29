@@ -238,6 +238,8 @@ See the [Gemini Web Provider Reference](extensions/gemini-web/README.md) for com
 /ponytail-help
 ```
 
+`/pnt-opt` is not a plain alias: before running the audit it takes a `crapper --no-coverage` snapshot of the scope and hands the audit the worst five functions by cyclomatic complexity, so "this is too complex" starts from a number instead of an opinion. Without `crapper` on `PATH` (or `PI_CRAPPER`), the command behaves exactly as before. The snapshot costs ~1.5 s on this repo's `extensions/`.
+
 The persisted default mode is stored in `~/.config/ponytail/config.json` (or `$XDG_CONFIG_HOME/ponytail/`).
 
 ## Install
