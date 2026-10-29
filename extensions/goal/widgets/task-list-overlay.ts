@@ -383,7 +383,7 @@ export async function showTaskListOverlay(
 
 // ── Tree entry collection ─────────────────────────────────────────────
 
-const STATUS_ICONS = { complete: "✓", skipped: "—", pending: "◌" } as const;
+const STATUS_ICONS = { complete: "█", skipped: "▒", pending: "░" } as const;
 const BRANCH = "├─";
 const BRANCH_LAST = "└─";
 

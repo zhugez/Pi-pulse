@@ -24,8 +24,9 @@ export interface GoalActivityItem {
 	kind: GoalActivityKind;
 	text: string;
 	/**
-	 * Display marker category for the dashboard feed: done (✓), current (▸),
-	 * skipped (~), or neutral (·) — the renderer maps these to §5.2 symbols.
+	 * Display marker category for the dashboard feed: done, current, skipped,
+	 * or neutral — the renderer maps these to the §5.2 block symbols
+	 * (█ ▓ ▒ ░).
 	 */
 	marker?: "done" | "current" | "skipped";
 }

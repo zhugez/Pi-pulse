@@ -937,7 +937,7 @@ function advanceAfterAnswer() {
 				if (q.context) renderContextLines(q.context);
 				// Auditor toggle line between context and options
 				if (auditorToggleInit) {
-					const circle = auditorEnabled ? "●" : "○";
+					const circle = auditorEnabled ? "█" : "░";
 					const label = auditorEnabled ? "Auditor enabled" : "Auditor disabled";
 					const color = auditorEnabled ? "success" : "warning";
 					add(theme.fg(color, ` ${circle} ${label}`) + theme.fg("dim", `  (press '${controls.hint("toggleAuditor")}' to toggle)`));

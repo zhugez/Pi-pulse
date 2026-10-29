@@ -290,7 +290,7 @@ function renderTaskTreeVerbose(tasks: GoalTask[], depth = 0, currentTaskId?: str
 	const indent = "  ".repeat(depth);
 	for (const t of tasks) {
 		const isCurrent = t.id === currentTaskId;
-		const marker = isCurrent ? "▸" : t.status === "complete" ? "✓" : t.status === "skipped" ? "~" : "·";
+		const marker = isCurrent ? "▓" : t.status === "complete" ? "█" : t.status === "skipped" ? "▒" : "░";
 		const contract = t.verificationContract ? ` — contract: ${t.verificationContract}` : "";
 		const evidence = t.status === "complete" && t.evidence ? ` — evidence: ${t.evidence}` : "";
 		lines.push(`${indent}${marker} ${t.id}  ${t.title}${contract}${evidence}`);
