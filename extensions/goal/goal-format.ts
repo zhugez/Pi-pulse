@@ -23,6 +23,14 @@ import {
 	type GoalTask,
 } from "./goal-record.ts";
 
+/** Task markers used by every goal UI surface (Nerd Font, one cell each).
+ *  Model-facing text (prompts, auditor brief) keeps plain `[x]`/`[ ]` so the
+ *  model is never handed private-use glyphs. */
+export const TASK_MARK = { complete: "", skipped: "", pending: "" } as const;
+export function taskMark(status: GoalTask["status"]): string {
+	return status === "complete" ? TASK_MARK.complete : status === "skipped" ? TASK_MARK.skipped : TASK_MARK.pending;
+}
+
 export const STATE_ENTRY = "pi-goal-state";
 export const FOCUS_ENTRY = "pi-goal-focus";
 export const GOAL_EVENT_ENTRY = "pi-goal-event";
@@ -365,12 +373,12 @@ export function buildGoalTaskDetailBlock(goal: GoalRecord): string {
 	})(goal.taskList.tasks, 0);
 	lines.push(`Tasks: ${header}`);
 	for (const entry of pending.slice(0, 3)) {
-		lines.push(`${"  ".repeat(entry.depth)}[ ] ${entry.task.id}: ${entry.task.title}`);
+		lines.push(`${"  ".repeat(entry.depth)}${TASK_MARK.pending} ${entry.task.id}: ${entry.task.title}`);
 		if (entry.task.verificationContract) lines.push(`${"  ".repeat(entry.depth + 1)}contract: ${entry.task.verificationContract}`);
 	}
 	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — expand the dashboard with Ctrl+Shift+T)`);
 	for (const t of recent) {
-		lines.push(`[x] ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
+		lines.push(`${TASK_MARK.complete} ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
 	}
 	return lines.join("\n");
 }

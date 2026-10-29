@@ -12,7 +12,7 @@ import { defineTool, type AgentToolResult, type ExtensionContext, type Theme } f
 import { Text } from "@earendil-works/pi-tui";
 
 import type { GoalTaskUpdateSpec } from "./goal-service.ts";
-import { goalDetails, renderGoalResult } from "./goal-format.ts";
+import { goalDetails, renderGoalResult, taskMark } from "./goal-format.ts";
 import { statusLabel, truncateText } from "./goal-core.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { buildTaskSummary, checkSubtasksComplete, findSubtaskDepthViolation, findTaskInTree, skipAllSubtasks } from "./goal-policy.ts";
@@ -304,7 +304,7 @@ pi.registerTool(defineTool({
 			const prefix = "  ".repeat(indent);
 			const lines: string[] = [];
 			for (const t of tasks) {
-				const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
+				const marker = taskMark(t.status);
 				const lw = t.lightweightSubtasks ? " (lightweight)" : "";
 				lines.push(`${prefix}${marker} ${t.id}: ${t.title}${lw}`);
 				if (t.subtasks && t.subtasks.length > 0) {

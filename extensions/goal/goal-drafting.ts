@@ -7,7 +7,7 @@ import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal
 import { buildDraftConfirmationText, buildProposalSummary, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
-import { goalDetails, renderGoalResult } from "./goal-format.ts";
+import { goalDetails, renderGoalResult, TASK_MARK } from "./goal-format.ts";
 import { budgetReached } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, formatGoalBudget } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
@@ -509,7 +509,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			// from the SAME objective text the apply path persists (extracted).
 			let taskBlock: { header: string; lines: string[] } | null = null;
 			if (flatTasks.length > 0) {
-				taskBlock = { header: "Tasks proposed for confirmation:", lines: flatTasks.map((t) => `[ ] ${t.id}: ${t.title}`) };
+				taskBlock = { header: "Tasks proposed for confirmation:", lines: flatTasks.map((t) => `${TASK_MARK.pending} ${t.id}: ${t.title}`) };
 			} else if (activeDraft(core)?.mode === "tweak") {
 				const retained = core.state.goal?.taskList?.tasks;
 				if (retained && retained.length > 0) {

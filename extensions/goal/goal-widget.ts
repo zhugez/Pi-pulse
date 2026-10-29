@@ -3,6 +3,7 @@ import { matchesKey, getKeybindings } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
+import { taskMark } from "./goal-format.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { serializeGoalFile } from "./storage/goal-files.ts";
 import type { AuditorWidgetProgress } from "./widgets/goal-widget.ts";
@@ -364,7 +365,7 @@ function renderDebugTaskLines(tasks: GoalTask[], indent = 0): string[] {
 			const prefix = "  ".repeat(indent);
 			const lines: string[] = [];
 			for (const t of tasks) {
-				const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
+				const marker = taskMark(t.status);
 				const lw = t.lightweightSubtasks ? " (lightweight)" : "";
 				lines.push(`${prefix}${marker} ${t.id}: ${t.title}${lw}`);
 				if (t.subtasks && t.subtasks.length > 0) {

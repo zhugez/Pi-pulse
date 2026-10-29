@@ -1,7 +1,18 @@
 import { goalDialogControls } from "./goal-dialog-controls.ts";
+import { TASK_MARK } from "./goal-format.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, Text, visibleWidth } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "./widgets/text-cache.ts";
+/** Colour for a task marker: complete → success, skipped → muted, anything
+ *  else (pending, or a legacy bracket) → warning. Accepts both the Nerd Font
+ *  markers and the legacy `[x]`/`[~]`/`[ ]` brackets that older drafts and
+ *  model output still contain. */
+function markColor(marker: string): "success" | "muted" | "warning" {
+	if (marker === TASK_MARK.complete || marker === "[x]") return "success";
+	if (marker === TASK_MARK.skipped || marker === "[~]") return "muted";
+	return "warning";
+}
+
 
 
 export type GoalDraftingFocus = "goal" | "sisyphus";
@@ -810,9 +821,9 @@ function advanceAfterAnswer() {
 					// 3. Lines with │ prefix come from buildDraftConfirmationText / buildTweakConfirmationText.
 					if (trimmed.startsWith("│")) {
 						const afterPipe = trimmed.slice(1).trim();
-						// 3a. Task checkbox under │ prefix — detect before key-value to avoid
-						// "[x] t1: ..." being misinterpreted as a key-value pair.
-						const pipeTaskMatch = afterPipe.match(/^(\[.\])(\s+)(.+)$/);
+						// 3a. Task marker under │ prefix — detect before key-value to avoid
+						// "marker t1: ..." being misinterpreted as a key-value pair.
+						const pipeTaskMatch = afterPipe.match(/^(\[.\]|[])(\s+)(.+)$/);
 						if (pipeTaskMatch) {
 							const bracket = pipeTaskMatch[1]!;
 							const sep = pipeTaskMatch[2]!;
@@ -821,7 +832,7 @@ function advanceAfterAnswer() {
 							const pipeContent = trimmed.slice(1);
 							const innerWs = pipeContent.slice(0, pipeContent.length - pipeContent.trimStart().length);
 							const linePrefix = "│" + innerWs;
-							const color = bracket === "[x]" ? "success" : "warning";
+							const color = markColor(bracket);
 							addWrappedPipe(linePrefix + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
 							continue;
 						}
@@ -856,14 +867,14 @@ function advanceAfterAnswer() {
 						continue;
 					}
 
-					// 6. Task checkbox item — "[ ] ...", "[x] ...", or "[~] ..." (with optional indent)
-					const checkMatch = trimmed.match(/^(\[.\])(\s+)(.+)$/);
+					// 6. Task marker item — a Nerd Font marker (or a legacy "[ ]"/"[x]"/"[~]" bracket) with optional indent
+					const checkMatch = trimmed.match(/^(\[.\]|[])(\s+)(.+)$/);
 					if (checkMatch) {
 						const bracket = checkMatch[1]!;
 						const sep = checkMatch[2]!;
 						const rest = checkMatch[3]!;
 						const indent = rawLine.slice(0, rawLine.length - trimmed.length);
-						const color = bracket === "[x]" ? "success" : "warning";
+						const color = markColor(bracket);
 						addWrapped(indent + theme.fg(color, bracket) + sep + theme.fg("muted", rest));
 						continue;
 					}
