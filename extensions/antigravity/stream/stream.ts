@@ -320,6 +320,14 @@ export function convertMessages(
       appendTurn(contents, GeminiRole.User, parts);
     } else if (msg.role === "assistant") {
       if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+        // The turn is dropped, so its calls are never sent. Record them so the
+        // matching results degrade to a plain observation instead of an orphan
+        // functionResponse (Google rejects mismatched call/response counts).
+        for (const block of msg.content) {
+          if (block.type === "toolCall") {
+            droppedToolCallIds.set(block.id || `empty:${block.name}`, "{}");
+          }
+        }
         continue;
       }
       const parts: GeminiPart[] = [];
@@ -394,11 +402,10 @@ export function convertMessages(
       const sanitizedId = toolCallIdNeeded(model.id, runtimeModel)
         ? sanitizeToolCallId(rawId, msg.toolName)
         : rawId;
-      const droppedArgs = requiresSig
-        ? (droppedToolCallIds.get(rawId) ??
-          droppedToolCallIds.get(sanitizedId) ??
-          (rawId === "" ? droppedToolCallIds.get(`empty:${msg.toolName}`) : undefined))
-        : undefined;
+      const droppedArgs =
+        droppedToolCallIds.get(rawId) ??
+        droppedToolCallIds.get(sanitizedId) ??
+        (rawId === "" ? droppedToolCallIds.get(`empty:${msg.toolName}`) : undefined);
       if (droppedArgs !== undefined) {
         const label =
           droppedArgs === "{}" ? `\`${msg.toolName}\`` : `\`${msg.toolName}\` (${droppedArgs})`;

@@ -1,4 +1,5 @@
 allowBuilds:
+  '@code-yeongyu/comment-checker': true
   '@google/genai': true
   esbuild: true
   protobufjs: true

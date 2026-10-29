@@ -8,6 +8,8 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
+- **Loop guard** — blocks byte-identical tool calls before they grind, with an actionable reason instead of a silent repeat.
+- **Comment checker** — runs `@code-yeongyu/comment-checker` after `write`/`edit`/`multiedit`/`apply_patch` and appends its warnings to the tool result.
 - **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
 - **Code Mode (`code_exec`)** — programmatically orchestrate file reads, shell commands, and data processing in an async sandbox without context bloat.
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
@@ -20,6 +22,26 @@ The collection currently includes two observability extensions, integrated model
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 
 ## Extension catalog
+
+### Loop guard
+
+A model that repeats the same call with identical arguments is not making progress — the result cannot change. Pi has no loop detection of its own, so this blocks the repeat and returns the block reason to the model as the reminder.
+
+- **Thresholds**: the 4th consecutive identical call is refused; after a block the threshold drops to 2 so a stuck agent escalates instead of grinding.
+- **No deadlock**: a blocked call always lets the next attempt through, so the guard can never wedge a run.
+- **Signature**: canonicalized JSON (key order cannot hide a repeat), hashed with SHA-256.
+- **Never blocks nested calls** (`ctx.executeTool` / codemode subcalls), which cannot re-plan mid-script.
+- **Toggle**: `PI_LOOP_GUARD=0`.
+
+### Comment checker
+
+Port of [`pi-comment-checker`](https://github.com/code-yeongyu/pi-comment-checker) (MIT, see `NOTICE`). After a file edit it feeds the change to the native `@code-yeongyu/comment-checker` tree-sitter binary and appends the verdict to the tool result, so redundant comments get flagged in the same turn they are written.
+
+- **Inputs**: `write`, `edit`, `multiedit`, and `apply_patch` (text hunks and OMO/Codex `details.files` metadata).
+- **Exit codes**: `0` pass, `2` warning (appended to the result), anything else is an error that leaves the result untouched.
+- **Bounded**: 64 KiB output cap per stream, 30 s timeout, SIGTERM then SIGKILL.
+- **Fails open**: a missing binary disables the check instead of blocking edits. `/comment-checker` reports status.
+- **Widget**: hidden by design — warnings ride the tool result instead of a TUI panel.
 
 ### Code Lens (`code_inspect`)
 
@@ -211,6 +233,13 @@ Requires Node.js 22.15.0 or newer.
 ```bash
 npm install
 npm run check
+```
+
+Performance changes go through the benchmark gate, which compares median **and** p95 against `bench/baseline.json` (5% relative tolerance, 1 ms absolute floor):
+
+```bash
+./scripts/bench.sh           # compare, exit 1 on a regression
+./scripts/bench.sh --write   # refresh the baseline after an intended change
 ```
 
 ## Security and privacy

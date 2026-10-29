@@ -45,6 +45,8 @@
   "pi": {
     "extensions": [
       "./extensions/startup-entry.ts",
+      "./extensions/loop-guard/index.ts",
+      "./extensions/comment-checker/index.ts",
       "./extensions/lens/index.ts",
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",
@@ -79,6 +81,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@code-yeongyu/comment-checker": "0.8.2",
     "@dietrichgebert/ponytail": "4.12.0",
     "cross-spawn": "^7.0.6",
     "undici": "^8.11.2"

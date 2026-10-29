@@ -166,6 +166,9 @@ importers:
 
   .:
     dependencies:
+      '@code-yeongyu/comment-checker':
+        specifier: 0.8.2
+        version: 0.8.2
       '@dietrichgebert/ponytail':
         specifier: 4.12.0
         version: 4.12.0
@@ -295,6 +298,36 @@ packages:
   '@babel/runtime@7.29.10':
     resolution: {integrity: sha512-NpugTzbKgGrNe45Ui32cN8vCFFMxVtP/9rtfwv0nP5FRDAjvYBxJcLVpYA9mr1jxP6cnIT7x9LUzuDTbWYYNRA==}
     engines: {node: '>=6.9.0'}
+
+  '@code-yeongyu/comment-checker-darwin-arm64@0.8.2':
+    resolution: {integrity: sha512-5ofWre3ArnVsuw8ijUIoPEWGPh4GnWZA4e+VULpasbVDQ9gx5rXWo31F7w/1KoPyWXM9qjWRVeu5GQg9gSh/lw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@code-yeongyu/comment-checker-darwin-x64@0.8.2':
+    resolution: {integrity: sha512-X53n8JgLLp3p/ZwxWfq47HgIduc9TNcqiYcRUNCgs5LUEtF6bPIO9455YhOAnvgrE1wKKHXdndIE53fUfgn/sQ==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@code-yeongyu/comment-checker-linux-arm64@0.8.2':
+    resolution: {integrity: sha512-mU4et025mpSQqEjV1AEhRWQ7gwo0O/usiWpUUNVCwSeWFVS/5Wo8oUkGA1/pprbnu20ua9gm6ga0StKfizgv7w==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@code-yeongyu/comment-checker-linux-x64@0.8.2':
+    resolution: {integrity: sha512-5Rcz32vA/X2k3opejxeoYpgMJB3z0NSnj1mnBwzaYUjEFScdnMgPdcAT8NTiXbgYXt2vyXJZ8UoJlLudHGffKg==}
+    cpu: [x64]
+    os: [linux]
+
+  '@code-yeongyu/comment-checker-win32-x64@0.8.2':
+    resolution: {integrity: sha512-uE+NyPK7vWz18ieN2TsKENtbJyub6EyRXhyOiC8mvoC+XdutG7kXINmv2S8/K4g75skBd3IaFGviQ8Mg5L/Ybg==}
+    cpu: [x64]
+    os: [win32]
+
+  '@code-yeongyu/comment-checker@0.8.2':
+    resolution: {integrity: sha512-utUhfCPdLNB54Z/41lbvJkzZNbgx3e0/AyoBhji1Z4i7A32vsPSR2w/GyVcNIvTUrfHaKXuq8YCBdni+ifflVw==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@dietrichgebert/ponytail@4.12.0':
     resolution: {integrity: sha512-62mgy8tCMtgp+utZAijIVBqSuOLnqlyJy/Lgrt2oCdtIdhJfTLZ1Bt5RhdAoizDSKSA3BiXSyBvLhwnqvkE4vQ==}
@@ -1473,6 +1506,29 @@ snapshots:
   '@aws/lambda-invoke-store@0.3.0': {}
 
   '@babel/runtime@7.29.10': {}
+
+  '@code-yeongyu/comment-checker-darwin-arm64@0.8.2':
+    optional: true
+
+  '@code-yeongyu/comment-checker-darwin-x64@0.8.2':
+    optional: true
+
+  '@code-yeongyu/comment-checker-linux-arm64@0.8.2':
+    optional: true
+
+  '@code-yeongyu/comment-checker-linux-x64@0.8.2':
+    optional: true
+
+  '@code-yeongyu/comment-checker-win32-x64@0.8.2':
+    optional: true
+
+  '@code-yeongyu/comment-checker@0.8.2':
+    optionalDependencies:
+      '@code-yeongyu/comment-checker-darwin-arm64': 0.8.2
+      '@code-yeongyu/comment-checker-darwin-x64': 0.8.2
+      '@code-yeongyu/comment-checker-linux-arm64': 0.8.2
+      '@code-yeongyu/comment-checker-linux-x64': 0.8.2
+      '@code-yeongyu/comment-checker-win32-x64': 0.8.2
 
   '@dietrichgebert/ponytail@4.12.0': {}
 

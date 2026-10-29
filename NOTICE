@@ -39,3 +39,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 (The capacity calculation logic in gemini-web-to-api cites HanaokaYuzu/Gemini-API for model parameter offsets.)
+
+The comment-checker extension (extensions/comment-checker/) is ported from
+pi-comment-checker:
+https://github.com/code-yeongyu/pi-comment-checker
+
+Original work copyright (c) code-yeongyu.
+MIT License. The source is copied verbatim apart from import extensions
+(.js -> .ts); its vitest suite was translated to node:test.
+
+It shells out to @code-yeongyu/comment-checker (MIT), a native tree-sitter
+binary distributed through optionalDependencies.

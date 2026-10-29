@@ -1,0 +1,25 @@
+{
+  "generatedAt": "2026-10-29T20:06:06.002Z",
+  "noiseTolerance": 0.05,
+  "absoluteFloorMs": 1,
+  "samples": [
+    {
+      "name": "loop-guard/canonicalSignature",
+      "medianMs": 0.0093,
+      "p95Ms": 0.0533,
+      "runs": 200
+    },
+    {
+      "name": "comment-checker/extractCommentCheckRequests",
+      "medianMs": 0.0016,
+      "p95Ms": 0.0086,
+      "runs": 200
+    },
+    {
+      "name": "lens/checkFileDiagnostics (cold, spawns tsc)",
+      "medianMs": 136.8558,
+      "p95Ms": 173.6033,
+      "runs": 9
+    }
+  ]
+}
