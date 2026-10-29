@@ -509,7 +509,7 @@ test("7. No replay after text, thinking, or tool output; generic/network/context
 
     const events500 = await collectEvents(pool7B.provider.streamSimple(dummyModel, makeContext(), { fetch: error500Fetch }));
     const ev500 = events500.at(-1) as { error: { errorMessage: string } };
-    assert.equal(ev500.error.errorMessage, "Codex request failed; no account replay performed.");
+    assert.equal(ev500.error.errorMessage, "Codex request failed (HTTP 500); no account replay performed.");
     assert.equal(genericAcc2Calls, 0);
 
     // 7C: Context length exceeded does not hop accounts
@@ -571,6 +571,8 @@ test("account commands reject the login alias and retain add and native OAuth", 
   let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
   let provider: Provider | undefined;
   codexPoolExtension({
+    events: { on: () => () => {}, emit: () => {} },
+    on: () => {},
     registerProvider: (registered: Provider) => { provider = registered; },
     registerCommand: (_name: string, command: { handler: typeof handler }) => { handler = command.handler; },
   } as unknown as ExtensionAPI);
@@ -601,6 +603,8 @@ test("9. Browser-success prompt cancellation versus genuine user cancellation", 
     // Capture interaction handler registered by codexPoolExtension
     let commandHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
     const fakePi = {
+      events: { on: () => () => {}, emit: () => {} },
+      on: () => {},
       registerProvider: () => {},
       registerCommand: (_name: string, def: { handler: typeof commandHandler }) => {
         commandHandler = def.handler;

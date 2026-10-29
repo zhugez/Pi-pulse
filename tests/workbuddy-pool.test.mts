@@ -12,6 +12,7 @@ import {
   repackToolResultBlocks,
 } from "../extensions/workbuddy-pool/payload.ts";
 import { AccountStore, importPanelAuths } from "../extensions/workbuddy-pool/store.ts";
+import { createWorkBuddyFetch } from "../extensions/workbuddy-pool/transport.ts";
 
 const account = { uid: "uid-1234-abcd", realm: "global" as const, accessToken: "a", refreshToken: "r", expiresAt: 0 };
 
@@ -110,6 +111,19 @@ test("reasoning effort is clamped to the supported ladder", () => {
   assert.equal(out.reasoning_effort, "high");
 });
 
+test("global DeepSeek V4.1 Flash clamps unsupported max to high", () => {
+  const out = prepareBody(body([{ role: "user", content: "hi" }], {
+    model: "deepseek-v4.1-flash",
+    reasoning_effort: "max",
+  }), {
+    model: "deepseek-v4.1-flash",
+    uid: "uid",
+    realm: "global",
+    efforts: { "deepseek-v4.1-flash": ["low", "high", "max"] },
+  }) as Record<string, unknown>;
+  assert.equal(out.reasoning_effort, "high");
+});
+
 test("catalog maps upstream models into pi models with effort maps", async () => {
   const verificationTestVector = {
     code: 0,
@@ -139,6 +153,60 @@ test("catalog maps upstream models into pi models with effort maps", async () =>
 test("static catalog starts with a directly callable DeepSeek model", () => {
   assert.equal(STATIC_CATALOG.models[0].id, "deepseek-v4.1-flash");
   assert.deepEqual(STATIC_CATALOG.efforts["deepseek-v4.1-flash"], ["low", "high", "max"]);
+});
+
+test("6004 model limits fail over and persist per-model cooldown", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "wb-transport-"));
+  const store = new AccountStore(join(dir, "accounts.json"));
+  await store.upsert({ ...account, uid: "first", nickname: "first" });
+  await store.upsert({ ...account, uid: "second", nickname: "second" });
+  const calls: string[] = [];
+  const upstreamFetch = (async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { model?: string };
+    const uid = String(new Headers(init?.headers).get("x-user-id"));
+    calls.push(`${uid}:${body.model}`);
+    if (uid === "first") {
+      return new Response(JSON.stringify({
+        code: 6004,
+        msg: "usage exceeds frequency limit, but don't worry, your usage will reset at 2099-01-01 00:00:00 UTC+8",
+      }), { status: 429 });
+    }
+    return new Response("data: [DONE]\\n\\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  const transport = createWorkBuddyFetch({
+    store,
+    catalog: () => ({ models: [], efforts: {}, defaultEfforts: {} }),
+    upstreamFetch,
+    maxAttempts: 2,
+  });
+  const response = await transport.fetch("https://www.workbuddy.ai/v2/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "deepseek-v4.1-flash", messages: [{ role: "user", content: "hi" }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["first:deepseek-v4.1-flash", "second:deepseek-v4.1-flash"]);
+  const saved = await store.read();
+  assert.ok((saved.accounts[0].modelCooldowns?.["deepseek-v4.1-flash"] ?? 0) > Date.now());
+});
+
+test("6004 does not retry a model when every account is blocked", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "wb-transport-blocked-"));
+  const store = new AccountStore(join(dir, "accounts.json"));
+  const reset = Date.now() + 60_000;
+  await store.upsert({ ...account, uid: "first", modelCooldowns: { "deepseek-v4.1-flash": reset } });
+  await store.upsert({ ...account, uid: "second", modelCooldowns: { "deepseek-v4.1-flash": reset } });
+  const transport = createWorkBuddyFetch({
+    store,
+    catalog: () => ({ models: [], efforts: {}, defaultEfforts: {} }),
+    upstreamFetch: (async () => { throw new Error("should not call upstream"); }) as typeof fetch,
+  });
+  const response = await transport.fetch("https://www.workbuddy.ai/v2/chat/completions", {
+    method: "POST",
+    body: JSON.stringify({ model: "deepseek-v4.1-flash", messages: [] }),
+  });
+  assert.equal(response.status, 409);
+  assert.match(await response.text(), /cooling down/);
 });
 
 test("panel auth files import into the account store", async () => {

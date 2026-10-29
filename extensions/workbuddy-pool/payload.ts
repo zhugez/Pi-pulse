@@ -6,6 +6,7 @@
  * specific 400/503 without it; keep them in sync with the Go source.
  */
 import { createHash } from "node:crypto";
+import type { Realm } from "./store.ts";
 
 type Json = Record<string, unknown>;
 
@@ -21,6 +22,8 @@ export interface PrepareOptions {
   defaultEfforts?: Record<string, string>;
   /** Account uid: isolates the upstream prompt cache per account. */
   uid: string;
+  /** WorkBuddy realm; global DeepSeek V4.1 Flash only accepts high effort. */
+  realm?: Realm;
   conversationId?: string;
   /** global realm requires a leading system message (upstream code 11-128). */
   ensureSystem?: boolean;
@@ -370,12 +373,18 @@ function injectThinking(body: Json, defaultEffort: string): void {
   ensureDeepSeekEffort(body, defaultEffort);
 }
 
+/** Global WorkBuddy advertises extra DeepSeek levels that its upstream does not serve reliably. */
+function supportedEffortsForRealm(model: string, efforts: Record<string, string[]> | undefined, realm?: Realm): string[] | undefined {
+  const canonical = model.replace(/^(?:global|cn):/i, "").toLowerCase();
+  if (realm === "global" && canonical === "deepseek-v4.1-flash") return ["high"];
+  return efforts?.[model];
+}
+
 /** Clamp reasoning_effort to what the model actually supports. */
-export function normalizeReasoningEffort(body: Json, efforts?: Record<string, string[]>): void {
-  if (!efforts) return;
+export function normalizeReasoningEffort(body: Json, efforts?: Record<string, string[]>, realm?: Realm): void {
   const model = typeof body.model === "string" ? body.model : "";
   if (!model) return;
-  const supported = efforts[model];
+  const supported = supportedEffortsForRealm(model, efforts, realm);
   if (!supported || supported.length === 0) return;
   const key = "reasoning_effort" in body ? "reasoning_effort" : "reasoningEffort" in body ? "reasoningEffort" : "";
   if (!key) return;
@@ -483,7 +492,7 @@ export function prepareBody(input: unknown, options: PrepareOptions): unknown {
   const model = typeof body.model === "string" ? body.model : options.model;
   if (model && body.model !== model) body.model = model;
   injectThinking(body, options.defaultEfforts?.[model] ?? "");
-  normalizeReasoningEffort(body, options.efforts);
+  normalizeReasoningEffort(body, options.efforts, options.realm);
   backfillReasoningContent(body);
   if (options.ensureSystem) ensureSystemFirst(body);
   injectPromptCacheKey(body, options.uid, options.conversationId);

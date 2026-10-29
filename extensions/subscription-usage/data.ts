@@ -6,6 +6,7 @@ export interface UsageBalance {
 
 export interface AccountUsageItem {
 	id: string;
+	name?: string;
 	active?: boolean;
 	cooldown?: boolean;
 	plan?: string;
@@ -80,6 +81,7 @@ function normalizeAccounts(value: unknown): AccountUsageItem[] | undefined {
 		const plan = typeof rec.plan === "string" ? rec.plan.trim() : undefined;
 		items.push({
 			id: rec.id.trim(),
+			...(typeof rec.name === "string" ? { name: rec.name } : {}),
 			active: Boolean(rec.active),
 			cooldown: Boolean(rec.cooldown),
 			...(plan ? { plan } : {}),

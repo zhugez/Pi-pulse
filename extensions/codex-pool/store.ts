@@ -18,6 +18,20 @@ export interface PoolData {
   accounts: Account[];
 }
 
+// Display hints only: never use these unverified claims for authorization.
+export function accountDisplayName(credential: OAuthCredential, fallback: string): string {
+  try {
+    const claims = JSON.parse(Buffer.from(credential.access.split(".")[1], "base64url").toString());
+    const profile = claims?.["https://api.openai.com/profile"];
+    for (const value of [profile?.email, claims?.email, profile?.name, claims?.name]) {
+      if (typeof value !== "string") continue;
+      const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "").trim().slice(0, 80);
+      if (label) return label;
+    }
+  } catch { /* Missing or malformed display claims use the caller's fallback. */ }
+  return fallback;
+}
+
 // JWT claims are identity hints, not verification. Only SDK-issued OAuth tokens
 // enter this store; the native Codex transport derives its own account header.
 export function accountIdentity(credential: OAuthCredential): string {

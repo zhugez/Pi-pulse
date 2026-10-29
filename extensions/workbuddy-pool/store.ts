@@ -16,6 +16,8 @@ export interface WbAccount {
   /** Remaining credit reported by the billing endpoint, for display/rotation. */
   credit?: number;
   cooldownUntil?: number;
+  /** Model-specific 6004 rate-limit deadlines; other models remain usable. */
+  modelCooldowns?: Record<string, number>;
   needsLogin?: boolean;
 }
 

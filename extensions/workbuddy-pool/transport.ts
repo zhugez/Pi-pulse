@@ -12,11 +12,14 @@ const MAX_REPLAY_BYTES = 1_000_000;
 
 /** Errors that mean "this account/model pair cannot serve this request right now". */
 const ROTATE_CODES = new Set(["11102", "11158", "11-128", "11133", "11129", "429", "401", "403", "500", "502", "503", "504"]);
+const MODEL_RATE_LIMIT_CODE = "6004";
 const QUOTA_CODES = new Set(["429", "insufficient_credit", "quota_exceeded"]);
 
 export interface TransportOptions {
   store: AccountStore;
   catalog: () => WbCatalog | undefined;
+  /** Optional upstream fetch seam for deterministic tests. */
+  upstreamFetch?: FetchFunction;
   /** Called with the uid that actually served a request. */
   onAccount?: (uid: string) => void;
   maxAttempts?: number;
@@ -45,6 +48,17 @@ function errorCode(text: string): string {
   return "";
 }
 
+function modelRateLimit(text: string): boolean {
+  return errorCode(text) === MODEL_RATE_LIMIT_CODE;
+}
+
+function parseResetAt(text: string): number | undefined {
+  const match = text.match(/reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC\+8/i);
+  if (!match) return undefined;
+  const value = Date.parse(`${match[1].replace(" ", "T")}+08:00`);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function rotateEligible(status: number, text: string): boolean {
   if (status === 400) return ROTATE_CODES.has(errorCode(text));
   return ROTATE_CODES.has(String(status));
@@ -60,17 +74,27 @@ function authFailure(status: number, text: string): boolean {
   return status === 401 || status === 403 || /re-?login|unauthor/i.test(text);
 }
 
-function usable(account: WbAccount, now: number): boolean {
+function usable(account: WbAccount, now: number, model: string): boolean {
   if (account.needsLogin) return false;
   if (account.cooldownUntil && account.cooldownUntil > now) return false;
-  return true;
+  const until = model ? account.modelCooldowns?.[model] : undefined;
+  return !until || until <= now;
 }
 
 /** Prefer accounts with credit headroom; stable order keeps behaviour predictable. */
-function candidates(accounts: WbAccount[], now: number): WbAccount[] {
-  const live = accounts.filter((account) => usable(account, now));
-  const pool = live.length > 0 ? live : accounts;
+function candidates(accounts: WbAccount[], now: number, model: string): WbAccount[] {
+  const modelPool = accounts.filter((account) => usable(account, now, model) || (model && !account.needsLogin && !account.modelCooldowns?.[model]));
+  const live = modelPool.filter((account) => usable(account, now, model));
+  const pool = live.length > 0 ? live : model ? modelPool : accounts.filter((account) => !account.needsLogin);
   return [...pool].sort((a, b) => (b.credit ?? 0) - (a.credit ?? 0));
+}
+
+function nextModelReset(accounts: WbAccount[], now: number, model: string): number | undefined {
+  if (!model) return undefined;
+  return accounts
+    .map((account) => account.modelCooldowns?.[model])
+    .filter((until): until is number => typeof until === "number" && until > now)
+    .sort((a, b) => a - b)[0];
 }
 
 /**
@@ -82,8 +106,9 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
   const stats: TransportStats = { attempts: 0 };
 
   const wrapped: FetchFunction = async (input, init) => {
+    const requestFetch = options.upstreamFetch ?? wbFetch();
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (!requestUrl.includes(CHAT_PATH)) return wbFetch()(input as string | URL | Request, init);
+    if (!requestUrl.includes(CHAT_PATH)) return requestFetch(input as string | URL | Request, init);
 
     const originalBody = typeof init?.body === "string" ? init.body : "";
     if (originalBody.length > MAX_REPLAY_BYTES) {
@@ -92,11 +117,24 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
     const incoming = headersToObject(init?.headers);
     const sessionId = incoming["x-client-request-id"] || incoming["x-session-affinity"] || "";
     const catalog = options.catalog();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(originalBody);
+    } catch {
+      parsed = undefined;
+    }
+    const model = typeof (parsed as { model?: unknown } | undefined)?.model === "string"
+      ? String((parsed as { model: string }).model)
+      : "";
     const data = await options.store.read();
-    const ordered = candidates(data.accounts, Date.now());
+    const ordered = candidates(data.accounts, Date.now(), model);
     if (ordered.length === 0) {
-      return new Response(JSON.stringify({ error: { message: "No WorkBuddy account configured. Run /workbuddy login." } }), {
-        status: 401,
+      const resetAt = nextModelReset(data.accounts, Date.now(), model);
+      const message = resetAt
+        ? `WorkBuddy model ${model} is cooling down until ${new Date(resetAt).toISOString()}`
+        : "No WorkBuddy account configured. Run /workbuddy login.";
+      return new Response(JSON.stringify({ error: { message } }), {
+        status: resetAt ? 409 : 401,
         headers: { "content-type": "application/json" },
       });
     }
@@ -116,20 +154,12 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
       }
       stats.attempts += 1;
       const meta = newChatMeta(sessionId || undefined);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(originalBody);
-      } catch {
-        parsed = undefined;
-      }
-      const model = typeof (parsed as { model?: unknown } | undefined)?.model === "string"
-        ? String((parsed as { model: string }).model)
-        : "";
       const body = prepareBody(parsed ?? originalBody, {
         model,
         efforts: catalog?.efforts,
         defaultEfforts: catalog?.defaultEfforts,
         uid: account.uid,
+        realm: account.realm,
         conversationId: meta.conversationId,
         ensureSystem: account.realm === "global",
       });
@@ -139,7 +169,7 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
       const target = `${accountBase(account)}${path}`;
       let response: Response;
       try {
-        response = await wbFetch()(target, {
+        response = await requestFetch(target, {
           method: "POST",
         headers: { ...chatHeaders(account, meta), "Content-Type": "application/json" },
         body: typeof body === "string" ? body : JSON.stringify(body),
@@ -159,7 +189,14 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
 
       lastText = await response.text();
       lastResponse = new Response(lastText, { status: response.status, headers: response.headers });
-      if (quotaFailure(response.status, lastText)) {
+      if (modelRateLimit(lastText)) {
+        const until = parseResetAt(lastText) ?? Date.now() + COOLDOWN_MS;
+        await options.store.update((store) => {
+          const current = store.accounts.find((a) => a.uid === account.uid);
+          if (!current) return;
+          current.modelCooldowns = { ...current.modelCooldowns, [model]: until };
+        });
+      } else if (quotaFailure(response.status, lastText)) {
         await options.store.update((store) => {
           const current = store.accounts.find((a) => a.uid === account.uid);
           if (current) current.cooldownUntil = Date.now() + COOLDOWN_MS;
@@ -173,7 +210,20 @@ export function createWorkBuddyFetch(options: TransportOptions): { fetch: FetchF
       if (!rotateEligible(response.status, lastText)) break;
     }
 
-    if (lastResponse) return lastResponse;
+    if (lastResponse) {
+      const state = await options.store.read();
+      if (modelRateLimit(lastText) && candidates(state.accounts, Date.now(), model).length === 0) {
+        const resetAt = nextModelReset(state.accounts, Date.now(), model);
+        const message = resetAt
+          ? `WorkBuddy model ${model} is cooling down until ${new Date(resetAt).toISOString()}`
+          : `WorkBuddy model ${model} is cooling down`;
+        return new Response(JSON.stringify({ error: { message } }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return lastResponse;
+    }
     return new Response(JSON.stringify({ error: { message: "WorkBuddy request failed without a response" } }), {
       status: 502,
       headers: { "content-type": "application/json" },

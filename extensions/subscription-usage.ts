@@ -43,7 +43,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AccountStore } from "./codex-pool/store.ts";
+import { AccountStore, accountDisplayName } from "./codex-pool/store.ts";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
@@ -584,238 +584,236 @@ function shortWindowKey(key: string): string {
 	return key;
 }
 
-export function formatUsageDetails(
-	data: UsageData,
-	providerId: string,
-	options: {
-		modelId?: string;
-		fetchedAt?: number;
-		now?: number;
-		theme?: { fg(color: string, text: string): string };
-		active?: boolean;
-	} = {},
-): string {
+type FormatUsageOptions = {
+	modelId?: string;
+	fetchedAt?: number;
+	now?: number;
+	theme?: { fg(color: string, text: string): string };
+	active?: boolean;
+};
+
+export function formatUsageDetails(data: UsageData, providerId: string, options: FormatUsageOptions = {}): string {
 	const now = options.now ?? Date.now();
 	const hasColor = isColorTheme(options.theme);
 	const c = (color: CtpColor, text: string) => (hasColor ? ctp(color, text) : text);
 
 	const normalized = normalizeUsageData(data);
-	if (!normalized) return `${c("overlay1", providerId)}: ${c("surface2", "no usage data")}`;
+	if (!normalized) return `${c('overlay1', providerId)}: ${c('surface2', 'no usage data')}`;
 
-	// Compact Dashboard View when running in interactive TUI (hasColor === true)
-	if (hasColor) {
-		const pColor = providerCtpColor(providerId);
-		const isActive = Boolean(options.active || options.modelId);
-		const leadIcon = isActive ? c("yellow", "⚡") : c(pColor, "◆");
-		const sepPipe = c("surface2", " │ ");
+	if (hasColor) return renderCompactUsage({ normalized, providerId, options, now, c });
+	return renderPlainUsage({ normalized, providerId, options, now, c });
 
-		// Antigravity reports separate gemini-* and 3p-* (Claude/GPT) pools. For the
-		// active model show only its pool; otherwise show both with pool-tagged labels.
-		const poolPrefix = options.modelId
-			? /claude|gpt/i.test(options.modelId) ? "3p-" : "gemini-"
-			: undefined;
-		let poolFiltered = false;
-		const selectPoolKeys = (keys: string[]): string[] => {
-			if (!poolPrefix) return keys;
-			const matched = keys.filter((k) => k.startsWith(poolPrefix));
-			if (matched.length === 0) return keys;
-			poolFiltered = true;
-			return matched;
-		};
-		const windowLabel = (key: string): string => {
-			if (!poolFiltered) {
-				if (key === "gemini-5h") return "G·5h";
-				if (key === "gemini-weekly") return "G·W ";
-				if (key === "3p-5h") return "3P·5h";
-				if (key === "3p-weekly") return "3P·W ";
-			}
-			return shortWindowKey(key);
-		};
-		const poolTag = (): { plain: string; colored: string } => {
-			if (!poolFiltered) return { plain: "", colored: "" };
-			const name = poolPrefix === "3p-" ? "Claude/GPT pool" : "Gemini pool";
-			return { plain: ` • ${name}`, colored: `${c("overlay1", " • ")}${c("teal", name)}` };
-		};
+}
 
-		const renderCompactHeader = (metaPlain: string, metaColored: string): string => {
-			const hasFresh =
-				typeof options.fetchedAt === "number" &&
-				Number.isFinite(options.fetchedAt) &&
-				options.fetchedAt > 0;
-			const freshPlain = hasFresh ? ` ↻ ${fetchAgeLabel(options.fetchedAt!, now)}` : "";
-			const ageMs = hasFresh ? Math.max(0, now - options.fetchedAt!) : 0;
-			const ageColor: CtpColor =
-				ageMs < 3_600_000 ? "green" : ageMs < 12 * 3_600_000 ? "yellow" : "overlay1";
-			const freshColored = hasFresh ? ` ${c(ageColor, `↻ ${fetchAgeLabel(options.fetchedAt!, now)}`)}` : "";
-			const leftPlainLen = 2 + providerId.length + metaPlain.length;
-			const targetWidth = 78;
-			const ruleLen = Math.max(3, targetWidth - leftPlainLen - freshPlain.length - 1);
-			const rule = ` ${c("surface2", "─".repeat(ruleLen))}`;
-			return `${leadIcon} ${c(pColor, providerId)}${metaColored}${rule}${freshColored}`;
-		};
 
-		const renderCompactCell = (
-			key: string,
-			percent: number,
-			resets: Record<string, number> | undefined,
-		): { text: string; width: number } => {
-			const safe = normalizePercent(percent) ?? 0;
-			const reset = resets?.[key];
-			const hasReset = typeof reset === "number" && Number.isFinite(reset);
-			const expired = hasReset && reset <= now;
-			const shownPct = expired ? 0 : safe;
-			const band: CtpColor = expired ? "overlay1" : ctpBandColor(safe);
-			const cells = detailColoredBar(shownPct, c);
-			const rawKey = windowLabel(key);
-			const rawPct = `${shownPct}%`.padStart(4);
-			const sKey = c("lavender", rawKey);
-			const sPct = c(band, rawPct);
-			if (hasReset) {
-				const rawRel = expired ? "done" : resetLabel(reset, now).padEnd(4);
-				const rawAbs = `(${vnShortStamp(reset, now)})`;
-				const rel = expired ? c("teal", rawRel) : c("yellow", rawRel);
-				const abs = c(expired ? "surface2" : "subtext0", rawAbs);
-				const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length + 1 + rawRel.length + 1 + rawAbs.length;
-				return { text: `${sKey} ${cells} ${sPct} ${rel} ${abs}`, width };
-			}
-			const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length;
-			return { text: `${sKey} ${cells} ${sPct}`, width };
-		};
+/** Everything both renderers read, destructured to the names the bodies already use. */
+type UsageRenderContext = {
+	normalized: UsageData;
+	providerId: string;
+	options: FormatUsageOptions;
+	now: number;
+	c: (color: CtpColor, text: string) => string;
+};
 
-		if (normalized.accounts && normalized.accounts.length > 1) {
-			const sortedAccounts = [...normalized.accounts].sort((a, b) => {
-				if (a.active !== b.active) return a.active ? -1 : 1;
-				if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
-				return a.id.localeCompare(b.id);
-			});
+function renderCompactUsage({ normalized, providerId, options, now, c }: UsageRenderContext): string {
+	const pColor = providerCtpColor(providerId);
+	const isActive = Boolean(options.active || options.modelId);
+	const leadIcon = isActive ? c('yellow', '⚡') : c(pColor, '◆');
+	const sepPipe = c('surface2', ' │ ');
 
-			const maxIdLen = Math.max(...sortedAccounts.map((a) => a.id.length));
-			const badgeLabel = (a: (typeof sortedAccounts)[number]) =>
-				a.plan ?? (a.active ? "active" : a.cooldown ? "cooldown" : "standby");
-			const maxBadgeLen = Math.max(...sortedAccounts.map((a) => badgeLabel(a).length));
-
-			const accountRows = sortedAccounts.map((acc) => {
-				const stateColor: CtpColor = acc.active ? "green" : acc.cooldown ? "yellow" : "sapphire";
-				const rawIcon = acc.active ? "●" : acc.cooldown ? "⏳" : "○";
-				const icon = c(stateColor, rawIcon);
-				const idText = c(acc.active ? "text" : "subtext0", acc.id.padEnd(maxIdLen));
-				const bRaw = badgeLabel(acc).padEnd(maxBadgeLen);
-				const bColor: CtpColor =
-					acc.plan === "Ultra" ? "pink" : acc.active ? "green" : acc.cooldown ? "yellow" : "mauve";
-				const badge = `${c("overlay1", "[")}${c(bColor, bRaw)}${c("overlay1", "]")}`;
-
-				const keys = selectPoolKeys(Object.keys(acc.windows)).sort((a, b) => {
-					const order = detailWindowOrder(a) - detailWindowOrder(b);
-					return order !== 0 ? order : a.localeCompare(b);
-				});
-				const cells: { text: string; width: number }[] = [];
-				for (const key of keys) {
-					const percent = acc.windows[key];
-					if (typeof percent !== "number") continue;
-					cells.push(renderCompactCell(key, percent, acc.resets));
-				}
-				return { prefix: `  ${icon} ${idText} ${badge}  `, cells };
-			});
-
-			const tag = poolTag();
-			const metaPlain = ` (${normalized.accounts.length} pooled${options.modelId ? ` • ${options.modelId}` : ""}${tag.plain})`;
-			const metaColored =
-				`${c("overlay1", " (")}${c("sky", `${normalized.accounts.length} pooled`)}` +
-				(options.modelId ? `${c("overlay1", " • ")}${c("flamingo", options.modelId)}` : "") +
-				tag.colored +
-				c("overlay1", ")");
-			const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
-
-			const colCount = Math.max(0, ...accountRows.map((r) => r.cells.length));
-			const colWidths = Array.from({ length: colCount }, (_, colIdx) =>
-				Math.max(0, ...accountRows.map((r) => r.cells[colIdx]?.width ?? 0)),
-			);
-
-			for (const row of accountRows) {
-				const paddedCells = row.cells.map((cell, idx) =>
-					idx < row.cells.length - 1
-						? cell.text + " ".repeat(Math.max(0, colWidths[idx] - cell.width))
-						: cell.text,
-				);
-				lines.push(`${row.prefix}${paddedCells.join(sepPipe)}`);
-			}
-			return lines.join("\n");
+	// Antigravity reports separate gemini-* and 3p-* (Claude/GPT) pools. For the
+	// active model show only its pool; otherwise show both with pool-tagged labels.
+	const poolPrefix = options.modelId ? (/claude|gpt/i.test(options.modelId) ? '3p-' : 'gemini-') : undefined;
+	let poolFiltered = false;
+	const selectPoolKeys = (keys: string[]): string[] => {
+		if (!poolPrefix) return keys;
+		const matched = keys.filter((k) => k.startsWith(poolPrefix));
+		if (matched.length === 0) return keys;
+		poolFiltered = true;
+		return matched;
+	};
+	const windowLabel = (key: string): string => {
+		if (!poolFiltered) {
+			if (key === 'gemini-5h') return 'G·5h';
+			if (key === 'gemini-weekly') return 'G·W ';
+			if (key === '3p-5h') return '3P·5h';
+			if (key === '3p-weekly') return '3P·W ';
 		}
+		return shortWindowKey(key);
+	};
+	const poolTag = (): { plain: string; colored: string } => {
+		if (!poolFiltered) return { plain: '', colored: '' };
+		const name = poolPrefix === '3p-' ? 'Claude/GPT pool' : 'Gemini pool';
+		return { plain: ` • ${name}`, colored: `${c('overlay1', ' • ')}${c('teal', name)}` };
+	};
 
-		// Single-account compact dashboard block
-		const keys = selectPoolKeys(Object.keys(normalized.windows)).sort((a, b) => {
-			const order = detailWindowOrder(a) - detailWindowOrder(b);
-			return order !== 0 ? order : a.localeCompare(b);
-		});
-		const metaPartsPlain: string[] = [];
-		const metaPartsColored: string[] = [];
-		if (normalized.plan) {
-			metaPartsPlain.push(normalized.plan);
-			metaPartsColored.push(c("pink", normalized.plan));
-		}
-		if (options.modelId) {
-			metaPartsPlain.push(options.modelId);
-			metaPartsColored.push(c("flamingo", options.modelId));
-		}
-		const singleTag = poolTag();
-		const metaPlain = metaPartsPlain.length > 0 ? ` (${metaPartsPlain.join(" • ")}${singleTag.plain})` : "";
-		const metaColored =
-			metaPartsColored.length > 0
-				? `${c("overlay1", " (")}${metaPartsColored.join(c("overlay1", " • "))}${singleTag.colored}${c("overlay1", ")")}`
-				: "";
-		const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
+	const renderCompactHeader = (metaPlain: string, metaColored: string): string => {
+		const hasFresh =
+			typeof options.fetchedAt === 'number' && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0;
+		const freshPlain = hasFresh ? ` ↻ ${fetchAgeLabel(options.fetchedAt!, now)}` : '';
+		const ageMs = hasFresh ? Math.max(0, now - options.fetchedAt!) : 0;
+		const ageColor: CtpColor = ageMs < 3_600_000 ? 'green' : ageMs < 12 * 3_600_000 ? 'yellow' : 'overlay1';
+		const freshColored = hasFresh ? ` ${c(ageColor, `↻ ${fetchAgeLabel(options.fetchedAt!, now)}`)}` : '';
+		const leftPlainLen = 2 + providerId.length + metaPlain.length;
+		const targetWidth = 78;
+		const ruleLen = Math.max(3, targetWidth - leftPlainLen - freshPlain.length - 1);
+		const rule = ` ${c('surface2', '─'.repeat(ruleLen))}`;
+		return `${leadIcon} ${c(pColor, providerId)}${metaColored}${rule}${freshColored}`;
+	};
 
-		const windowCells: string[] = [];
-		for (const key of keys) {
-			const percent = normalized.windows[key];
-			if (typeof percent !== "number") continue;
-			windowCells.push(`${c("mauve", "•")} ${renderCompactCell(key, percent, normalized.resets).text}`);
-		}
-		if (typeof normalized.resetsLeft === "number" && normalized.resetsLeft > 0) {
-			const label = normalized.resetsLeft === 1 ? "1 reset left" : `${normalized.resetsLeft} resets left`;
-			windowCells.push(c("green", `↻ ${label}`));
-		}
-		if (normalized.balance) {
-			windowCells.push(`${c("lavender", "bal")} ${c("green", formatBalance(normalized.balance))}`);
-		}
-		if (windowCells.length > 0) {
-			lines.push(`  ${windowCells.join(sepPipe)}`);
-		}
-		if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
-			const peak = getDeepSeekPeakInfo(now);
-			const tag = peak.isPeak
-				? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
-				: deepSeekOffPeakDetail(peak, now);
-			lines.push(
-				`  ${c("mauve", "•")} ${c("lavender", "deepseek:")} ${c(peak.isPeak ? "peach" : "green", tag)}${sepPipe}${c("subtext0", formatDeepSeekPeakWindows(now))}`,
-			);
-		}
-		return lines.join("\n");
-	}
-
-	// Plain-text format (unit tests & non-color environments)
-	const renderWindowLine = (
+	const renderCompactCell = (
 		key: string,
 		percent: number,
 		resets: Record<string, number> | undefined,
-	) => {
+	): { text: string; width: number } => {
+		const safe = normalizePercent(percent) ?? 0;
+		const reset = resets?.[key];
+		const hasReset = typeof reset === 'number' && Number.isFinite(reset);
+		const expired = hasReset && reset <= now;
+		const shownPct = expired ? 0 : safe;
+		const band: CtpColor = expired ? 'overlay1' : ctpBandColor(safe);
+		const cells = detailColoredBar(shownPct, c);
+		const rawKey = windowLabel(key);
+		const rawPct = `${shownPct}%`.padStart(4);
+		const sKey = c('lavender', rawKey);
+		const sPct = c(band, rawPct);
+		if (hasReset) {
+			const rawRel = expired ? 'done' : resetLabel(reset, now).padEnd(4);
+			const rawAbs = `(${vnShortStamp(reset, now)})`;
+			const rel = expired ? c('teal', rawRel) : c('yellow', rawRel);
+			const abs = c(expired ? 'surface2' : 'subtext0', rawAbs);
+			const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length + 1 + rawRel.length + 1 + rawAbs.length;
+			return { text: `${sKey} ${cells} ${sPct} ${rel} ${abs}`, width };
+		}
+		const width = rawKey.length + 1 + BAR_CELLS + 1 + rawPct.length;
+		return { text: `${sKey} ${cells} ${sPct}`, width };
+	};
+
+	if (normalized.accounts && (normalized.accounts.length > 1 || providerId === 'codex-pool')) {
+		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
+			if (a.active !== b.active) return a.active ? -1 : 1;
+			if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
+			return a.id.localeCompare(b.id);
+		});
+
+		const maxIdLen = Math.max(...sortedAccounts.map((a) => (a.name ?? a.id).length));
+		const badgeLabel = (a: (typeof sortedAccounts)[number]) =>
+			(a.plan === 'self_serve_business_prolite' ? 'Business (Pro Lite)' : a.plan) ??
+			(a.active ? 'active' : a.cooldown ? 'cooldown' : 'standby');
+		const maxBadgeLen = Math.max(...sortedAccounts.map((a) => badgeLabel(a).length));
+
+		const accountRows = sortedAccounts.map((acc) => {
+			const stateColor: CtpColor = acc.active ? 'green' : acc.cooldown ? 'yellow' : 'sapphire';
+			const rawIcon = acc.active ? '●' : acc.cooldown ? '⏳' : '○';
+			const icon = c(stateColor, rawIcon);
+			const idText = c(acc.active ? 'text' : 'subtext0', (acc.name ?? acc.id).padEnd(maxIdLen));
+			const bRaw = badgeLabel(acc).padEnd(maxBadgeLen);
+			const bColor: CtpColor = acc.plan === 'Ultra' ? 'pink' : acc.active ? 'green' : acc.cooldown ? 'yellow' : 'mauve';
+			const badge = `${c('overlay1', '[')}${c(bColor, bRaw)}${c('overlay1', ']')}`;
+
+			const keys = selectPoolKeys(Object.keys(acc.windows)).sort((a, b) => {
+				const order = detailWindowOrder(a) - detailWindowOrder(b);
+				return order !== 0 ? order : a.localeCompare(b);
+			});
+			const cells: { text: string; width: number }[] = [];
+			for (const key of keys) {
+				const percent = acc.windows[key];
+				if (typeof percent !== 'number') continue;
+				cells.push(renderCompactCell(key, percent, acc.resets));
+			}
+			return { prefix: `  ${icon} ${idText} ${badge}  `, cells };
+		});
+
+		const tag = poolTag();
+		const metaPlain = ` (${normalized.accounts.length} pooled${options.modelId ? ` • ${options.modelId}` : ''}${tag.plain})`;
+		const metaColored =
+			`${c('overlay1', ' (')}${c('sky', `${normalized.accounts.length} pooled`)}` +
+			(options.modelId ? `${c('overlay1', ' • ')}${c('flamingo', options.modelId)}` : '') +
+			tag.colored +
+			c('overlay1', ')');
+		const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
+
+		const colCount = Math.max(0, ...accountRows.map((r) => r.cells.length));
+		const colWidths = Array.from({ length: colCount }, (_, colIdx) =>
+			Math.max(0, ...accountRows.map((r) => r.cells[colIdx]?.width ?? 0)),
+		);
+
+		for (const row of accountRows) {
+			const paddedCells = row.cells.map((cell, idx) =>
+				idx < row.cells.length - 1 ? cell.text + ' '.repeat(Math.max(0, colWidths[idx] - cell.width)) : cell.text,
+			);
+			lines.push(`${row.prefix}${paddedCells.join(sepPipe)}`);
+		}
+		return lines.join('\n');
+	}
+
+	// Single-account compact dashboard block
+	const keys = selectPoolKeys(Object.keys(normalized.windows)).sort((a, b) => {
+		const order = detailWindowOrder(a) - detailWindowOrder(b);
+		return order !== 0 ? order : a.localeCompare(b);
+	});
+	const metaPartsPlain: string[] = [];
+	const metaPartsColored: string[] = [];
+	if (normalized.plan) {
+		metaPartsPlain.push(normalized.plan);
+		metaPartsColored.push(c('pink', normalized.plan));
+	}
+	if (options.modelId) {
+		metaPartsPlain.push(options.modelId);
+		metaPartsColored.push(c('flamingo', options.modelId));
+	}
+	const singleTag = poolTag();
+	const metaPlain = metaPartsPlain.length > 0 ? ` (${metaPartsPlain.join(' • ')}${singleTag.plain})` : '';
+	const metaColored =
+		metaPartsColored.length > 0
+			? `${c('overlay1', ' (')}${metaPartsColored.join(c('overlay1', ' • '))}${singleTag.colored}${c('overlay1', ')')}`
+			: '';
+	const lines: string[] = [renderCompactHeader(metaPlain, metaColored)];
+
+	const windowCells: string[] = [];
+	for (const key of keys) {
+		const percent = normalized.windows[key];
+		if (typeof percent !== 'number') continue;
+		windowCells.push(`${c('mauve', '•')} ${renderCompactCell(key, percent, normalized.resets).text}`);
+	}
+	if (typeof normalized.resetsLeft === 'number' && normalized.resetsLeft > 0) {
+		const label = normalized.resetsLeft === 1 ? '1 reset left' : `${normalized.resetsLeft} resets left`;
+		windowCells.push(c('green', `↻ ${label}`));
+	}
+	if (normalized.balance) {
+		windowCells.push(`${c('lavender', 'bal')} ${c('green', formatBalance(normalized.balance))}`);
+	}
+	if (windowCells.length > 0) {
+		lines.push(`  ${windowCells.join(sepPipe)}`);
+	}
+	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
+		const peak = getDeepSeekPeakInfo(now);
+		const tag = peak.isPeak ? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left` : deepSeekOffPeakDetail(peak, now);
+		lines.push(
+			`  ${c('mauve', '•')} ${c('lavender', 'deepseek:')} ${c(peak.isPeak ? 'peach' : 'green', tag)}${sepPipe}${c('subtext0', formatDeepSeekPeakWindows(now))}`,
+		);
+	}
+	return lines.join('\n');
+}
+
+function renderPlainUsage({ normalized, providerId, options, now }: UsageRenderContext): string {
+	// Plain-text format (unit tests & non-color environments)
+	const renderWindowLine = (key: string, percent: number, resets: Record<string, number> | undefined) => {
 		const safe = normalizePercent(percent) ?? 0;
 		const cells = detailBar(safe);
 		const paddedKey = key.padEnd(9);
 		const paddedPct = `${safe}%`.padStart(4);
 		const reset = resets?.[key];
-		if (typeof reset === "number" && Number.isFinite(reset)) {
+		if (typeof reset === 'number' && Number.isFinite(reset)) {
 			return `  \u2022 ${paddedKey} ${paddedPct} ${cells}  resets ${resetLabel(reset, now)} (${vnStamp(reset, now)})`;
 		}
 		return `  \u2022 ${paddedKey} ${paddedPct} ${cells}`;
 	};
 
-	if (normalized.accounts && normalized.accounts.length > 1) {
+	if (normalized.accounts && (normalized.accounts.length > 1 || providerId === 'codex-pool')) {
 		const poolLabel = ` (${normalized.accounts.length} accounts pooled)`;
-		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
-		const lines: string[] = [
-			`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`,
-		];
+		const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : '';
+		const lines: string[] = [`Subscription usage \u2014 ${providerId}${poolLabel}${headerModel}`];
 		const sortedAccounts = [...normalized.accounts].sort((a, b) => {
 			if (a.active !== b.active) return a.active ? -1 : 1;
 			if (a.cooldown !== b.cooldown) return a.cooldown ? 1 : -1;
@@ -823,10 +821,10 @@ export function formatUsageDetails(
 		});
 
 		for (const acc of sortedAccounts) {
-			lines.push("");
-			const icon = acc.active ? "\u25CF" : acc.cooldown ? "\u23F3" : "\u25CB";
-			const status = acc.active ? "active" : acc.cooldown ? "cooldown" : "standby";
-			const planText = acc.plan ? ` \u2022 ${acc.plan}` : "";
+			lines.push('');
+			const icon = acc.active ? '\u25CF' : acc.cooldown ? '\u23F3' : '\u25CB';
+			const status = acc.active ? 'active' : acc.cooldown ? 'cooldown' : 'standby';
+			const planText = acc.plan ? ` \u2022 ${acc.plan}` : '';
 			lines.push(`${icon} ${acc.id} [${status}${planText}]`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
@@ -834,34 +832,31 @@ export function formatUsageDetails(
 			});
 			for (const key of keys) {
 				const percent = acc.windows[key];
-				if (typeof percent !== "number") continue;
+				if (typeof percent !== 'number') continue;
 				lines.push(renderWindowLine(key, percent, acc.resets));
 			}
 		}
-		if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
-			lines.push("");
+		if (typeof options.fetchedAt === 'number' && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
+			lines.push('');
 			lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
 		}
-		return lines.join("\n");
+		return lines.join('\n');
 	}
 
-	const headerPlan = normalized.plan ? ` (${normalized.plan})` : "";
-	const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : "";
-	const lines: string[] = [
-		`Subscription usage \u2014 ${providerId}${headerPlan}${headerModel}`,
-	];
+	const headerPlan = normalized.plan ? ` (${normalized.plan})` : '';
+	const headerModel = options.modelId ? ` \u2022 ${options.modelId}` : '';
+	const lines: string[] = [`Subscription usage \u2014 ${providerId}${headerPlan}${headerModel}`];
 	const keys = Object.keys(normalized.windows).sort((a, b) => {
 		const order = detailWindowOrder(a) - detailWindowOrder(b);
 		return order !== 0 ? order : a.localeCompare(b);
 	});
 	for (const key of keys) {
 		const percent = normalized.windows[key];
-		if (typeof percent !== "number") continue;
+		if (typeof percent !== 'number') continue;
 		lines.push(renderWindowLine(key, percent, normalized.resets));
 	}
-	if (typeof normalized.resetsLeft === "number") {
-		const label =
-			normalized.resetsLeft === 1 ? "1 left" : `${normalized.resetsLeft} left`;
+	if (typeof normalized.resetsLeft === 'number') {
+		const label = normalized.resetsLeft === 1 ? '1 left' : `${normalized.resetsLeft} left`;
 		lines.push(`  \u2022 resets:   ${label}`);
 	}
 	if (normalized.balance) {
@@ -869,16 +864,14 @@ export function formatUsageDetails(
 	}
 	if (usesDeepSeekPeakPricing(providerId, options.modelId)) {
 		const peak = getDeepSeekPeakInfo(now);
-		const tag = peak.isPeak
-			? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left`
-			: deepSeekOffPeakDetail(peak, now);
+		const tag = peak.isPeak ? `Peak hours ${resetLabel(peak.nextFlipMs, now)} left` : deepSeekOffPeakDetail(peak, now);
 		lines.push(`  \u2022 deepseek: ${tag}`);
 		lines.push(`  \u2022 peak win: ${formatDeepSeekPeakWindows(now)}`);
 	}
-	if (typeof options.fetchedAt === "number" && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
+	if (typeof options.fetchedAt === 'number' && Number.isFinite(options.fetchedAt) && options.fetchedAt > 0) {
 		lines.push(`Updated ${fetchAgeLabel(options.fetchedAt, now)}`);
 	}
-	return lines.join("\n");
+	return lines.join('\n');
 }
 /** ±JITTER_RATIO randomization so timers don't line up across instances. */
 function jitter(ms: number): number {
@@ -1373,25 +1366,42 @@ export const codexPoolCfg: ProviderCfg = {
 	sharedCache: false,
 	async fetchUsage(signal) {
 		const store = new AccountStore(path.join(getAgentDir(), "codex-accounts.json"));
-		const { accounts } = await store.read(signal);
+		const { accounts, preferred } = await store.read(signal);
 		// Usage polling is read-only: token rotation remains owned by the pool.
 		const usable = accounts.filter((account) => !account.needsLogin && account.credential.expires > Date.now());
 		if (!usable.length) throw new MissingCredentialError("no unexpired accounts for codex-pool; sign in or use the pool to refresh credentials");
 		const windows: Record<string, number> = {};
 		const resets: Record<string, number> = {};
+		const accountUsage: NonNullable<UsageData["accounts"]> = [];
+		const names = accounts.map((account, index) => accountDisplayName(account.credential, `Account ${index + 1}`));
 		for (const account of usable) {
+			const index = accounts.indexOf(account);
+			const name = names[index];
+			const labelName = names.filter((label) => label === name).length > 1 ? `${name} (Account ${index + 1})` : name;
 			const data = await fetchCodexUsage(account.credential.access, signal,
 				typeof account.credential.accountId === "string" ? account.credential.accountId : undefined);
+			accountUsage.push({ id: account.id, name: labelName, plan: data.plan, active: account.id === (usable.some((a) => a.id === preferred) ? preferred : usable[0].id), windows: data.windows, resets: data.resets });
 			for (const [key, percent] of Object.entries(data.windows)) {
-				const label = `${account.id.slice(0, 12)} ${key}`;
+				const label = `${labelName} ${key}`;
 				windows[label] = percent;
 				if (data.resets?.[key] !== undefined) resets[label] = data.resets[key];
 			}
 		}
-		return { windows, resets, plan: `codex-pool (${usable.length}/${accounts.length} accounts)` };
+		return { windows, resets, accounts: accountUsage, plan: `codex-pool (${usable.length}/${accounts.length} accounts)` };
 	},
 	render: codexCfg.render,
 };
+
+export function renderCodexPoolFooter(data: UsageData, theme: { fg(color: string, text: string): string }, selectedId?: string, style: UsageStyle = "bars"): string {
+	const accounts = data.accounts ?? [];
+	const account = selectedId ? accounts.find((item) => item.id === selectedId) : accounts.find((item) => item.active);
+	if (!account) return theme.fg("dim", selectedId ? "Codex · usage pending" : "Codex · awaiting request");
+	const name = account.name ?? "Account";
+	const short = name.split("@")[0];
+	const label = accounts.filter((item) => (item.name ?? "Account").split("@")[0] === short).length > 1 ? name : short;
+	const nameTag = isColorTheme(theme) ? ctp("subtext0", label) : theme.fg("muted", label);
+	return joinParts([nameTag, codexCfg.render(account, theme, undefined, style)].filter(Boolean), theme);
+}
 
 export const alpakyrosPoolCfg: ProviderCfg = {
 	id: "alpakyros-pool",
@@ -2018,6 +2028,26 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 export default function (pi: ExtensionAPI) {
 	const cache = new Map<string, ProviderState>();
 	let currentCtx: StatusCtx | undefined;
+	let selectedPoolAccount: string | undefined;
+	const onPoolAccountSelected = (event: unknown) => {
+		const id = asRecord(event)?.id;
+		if (typeof id !== "string") return;
+		selectedPoolAccount = id;
+		const poolData = cache.get("codex-pool")?.lastData;
+		if (poolData?.accounts) {
+			for (const account of poolData.accounts) account.active = account.id === id;
+		}
+		const ui = currentCtx ? safeUi(currentCtx) : undefined;
+		const data = cache.get("codex-pool")?.lastData;
+		if (ui && data && mode !== "off") renderUi(ui, "codex-pool", renderCodexPoolFooter(data, ui.theme, id, mode));
+	};
+	let unsubscribePool = pi.events?.on("codex-pool:account-selected", onPoolAccountSelected);
+	pi.on("session_start", () => {
+		selectedPoolAccount = undefined;
+		unsubscribePool?.();
+		unsubscribePool = pi.events?.on("codex-pool:account-selected", onPoolAccountSelected);
+	});
+	pi.on("session_shutdown", () => { unsubscribePool?.(); });
 	const prefs = loadPrefs();
 	const cfgs = [...usageProviderCfgs, ...(prefs.codexLbProviders ?? [])
 		.filter((id) => !usageProviderCfgs.some((cfg) => cfg.id === id))
@@ -2059,7 +2089,7 @@ export default function (pi: ExtensionAPI) {
 					if (!cfg || !state?.lastData) return wrapTextWithAnsi(text, width);
 					const data = state.lastData;
 					const render = (style: UsageStyle) => {
-						const value = cfg.render(data, theme, model.id, style);
+						const value = cfg.id === "codex-pool" ? renderCodexPoolFooter(data, theme, selectedPoolAccount, style) : cfg.render(data, theme, model.id, style);
 						return state.failStreak > 0 ? theme.fg("warning", `${value} ⚠`) : value;
 					};
 					const full = render(mode);
@@ -2084,7 +2114,7 @@ export default function (pi: ExtensionAPI) {
 		modelId?: string,
 	): string {
 		if (mode === "off") return "";
-		return cfg.render(data, ui.theme, modelId, mode) || `${cfg.id}: no data`;
+		return (cfg.id === "codex-pool" ? renderCodexPoolFooter(data, ui.theme, selectedPoolAccount, mode) : cfg.render(data, ui.theme, modelId, mode)) || `${cfg.id}: no data`;
 	}
 
 	function freshState(): ProviderState {
@@ -2410,6 +2440,7 @@ export default function (pi: ExtensionAPI) {
 	/** Route to the right provider config for the active model. */
 	function route(ctx: StatusCtx, force: boolean) {
 		currentCtx = ctx;
+		pi.events?.emit("codex-pool:request-account", {});
 		if (mode === "off") {
 			stopDiskCacheWatcher();
 			return;
@@ -2688,7 +2719,10 @@ export default function (pi: ExtensionAPI) {
 				const modelId = isActive ? model?.id : undefined;
 				if (data) {
 					sections.push(
-						formatUsageDetails(data, cfg.id, {
+						formatUsageDetails(cfg.id === "codex-pool" && selectedPoolAccount ? {
+							...data,
+							accounts: data.accounts?.map((account) => ({ ...account, active: account.id === selectedPoolAccount })),
+						} : data, cfg.id, {
 							modelId,
 							fetchedAt,
 							now,

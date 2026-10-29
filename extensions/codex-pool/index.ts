@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { createCodexPool } from "./provider.ts";
-import { AccountStore, PoolError } from "./store.ts";
+import { AccountStore, PoolError, accountDisplayName } from "./store.ts";
 
 function emit(ctx: ExtensionCommandContext, text: string, error = false): void {
   if (ctx.hasUI) ctx.ui.notify(text, error ? "error" : "info");
@@ -46,7 +46,21 @@ function interaction(ctx: ExtensionCommandContext): ProviderAuthInteraction {
 
 export default function codexPoolExtension(pi: ExtensionAPI): void {
   const store = new AccountStore(join(getAgentDir(), "codex-accounts.json"));
-  const pool = createCodexPool(store);
+  let selectedId: string | undefined;
+  const publishSelected = () => {
+    if (selectedId) pi.events.emit("codex-pool:account-selected", { id: selectedId });
+  };
+  const pool = createCodexPool(store, undefined, (id) => {
+    selectedId = id;
+    publishSelected();
+  });
+  let unsubscribe = pi.events.on("codex-pool:request-account", publishSelected);
+  pi.on("session_start", () => {
+    selectedId = undefined;
+    unsubscribe();
+    unsubscribe = pi.events.on("codex-pool:request-account", publishSelected);
+  });
+  pi.on("session_shutdown", () => unsubscribe());
   (pi.registerProvider as (provider: unknown) => void)(pool.provider);
   pi.registerCommand("codex-pool.accounts", {
     description: "Codex pool: list | add | switch <id> | remove <id>",
@@ -67,10 +81,10 @@ export default function codexPoolExtension(pi: ExtensionAPI): void {
           emit(ctx, `Codex account ${action === "switch" ? "preferred" : "removed"}: ${changed.slice(0, 12)}.`);
         } else if (action === "list") {
           const data = await store.read(ctx.signal);
-          const lines = data.accounts.map((account) => {
+          const lines = data.accounts.map((account, index) => {
             const status = account.needsLogin ? "login required" : (account.cooldownUntil ?? 0) > Date.now()
               ? `cooldown until ${new Date(account.cooldownUntil!).toISOString()}` : "ready";
-            return `${account.id === data.preferred ? "*" : " "} ${account.id.slice(0, 12)}  ${status}`;
+            return `${account.id === data.preferred ? "*" : " "} ${account.id.slice(0, 12)}  ${accountDisplayName(account.credential, `Account ${index + 1}`)}  ${status}`;
           });
           emit(ctx, lines.length ? `${lines.join("\n")}\n* preferred; session choice stays sticky until unavailable or switched.` :
             "No Codex accounts. Use /login codex-pool or /codex-pool.accounts add.");
