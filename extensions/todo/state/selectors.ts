@@ -45,7 +45,7 @@ export function selectTodoCounts(state: TaskState): TodoCounts {
 /**
  * Whether any visible task carries a `blockedBy` reference. The overlay uses
  * this to gate the `#id` prefix on per-task rows — without at least one
- * `⛓ #N` suffix, the per-row id has no anchor.
+ * ` #N` suffix, the per-row id has no anchor.
  */
 export function selectShowTaskIds(state: TaskState): boolean {
 	return selectVisibleTasks(state).some((t) => t.blockedBy && t.blockedBy.length > 0);

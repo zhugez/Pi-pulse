@@ -1,5 +1,5 @@
 import { goalDialogControls } from "./goal-dialog-controls.ts";
-import { TASK_MARK } from "./goal-format.ts";
+import { TASK_MARK, taskMark } from "./goal-format.ts";
 import { truncateToWidth } from "./widgets/text-cache.ts";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
@@ -13,7 +13,7 @@ export function renderConfirmationTasks(tasks: readonly GoalTask[], indent: numb
 	for (const t of tasks) {
 		const lw = t.lightweightSubtasks ? " (lightweight)" : "";
 		const contract = t.verificationContract ? ` contract: ${t.verificationContract}` : "";
-		lines.push(`${prefix}${TASK_MARK.pending} ${t.id}: ${t.title}${lw}${contract}`);
+		lines.push(`${prefix}${taskMark(t.status)} ${t.id}: ${t.title}${lw}${contract}`);
 		if (t.subtasks && t.subtasks.length > 0) {
 			lines.push(...renderConfirmationTasks(t.subtasks, indent + 1));
 		}

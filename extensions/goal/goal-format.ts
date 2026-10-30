@@ -373,12 +373,12 @@ export function buildGoalTaskDetailBlock(goal: GoalRecord): string {
 	})(goal.taskList.tasks, 0);
 	lines.push(`Tasks: ${header}`);
 	for (const entry of pending.slice(0, 3)) {
-		lines.push(`${"  ".repeat(entry.depth)}${TASK_MARK.pending} ${entry.task.id}: ${entry.task.title}`);
+		lines.push(`${"  ".repeat(entry.depth)}[ ] ${entry.task.id}: ${entry.task.title}`);
 		if (entry.task.verificationContract) lines.push(`${"  ".repeat(entry.depth + 1)}contract: ${entry.task.verificationContract}`);
 	}
 	if (pending.length > 3) lines.push(`(+${pending.length - 3} more pending — expand the dashboard with Ctrl+Shift+T)`);
 	for (const t of recent) {
-		lines.push(`${TASK_MARK.complete} ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
+		lines.push(`[x] ${t.id}: ${t.title}${t.evidence ? ` — ${t.evidence}` : ""}`);
 	}
 	return lines.join("\n");
 }

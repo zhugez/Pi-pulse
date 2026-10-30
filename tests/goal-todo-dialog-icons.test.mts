@@ -172,8 +172,11 @@ test('task confirmation, escape, task overlay and controls render real component
   await capture(
     (ctx) => showTaskConfirmation(ctx, renderConfirmationTasks(goal.taskList!.tasks, 0).join('\n')),
     (component) => {
-      assert.match(component.render(80).join('\n'), / done/);
-      assert.match(component.render(80).join('\n'), / Confirm task list/);
+      const confirmation = component.render(80).join('\n');
+      assert.match(confirmation, / done/);
+      assert.match(confirmation, / skip/);
+      assert.match(confirmation, / next/);
+      assert.match(confirmation, / Confirm task list/);
       checkWidths('task-confirmation', component);
     },
   );
@@ -262,8 +265,8 @@ test('todo overlay, tool cards, dependency markers and command rows stay consist
   }
 });
 
-test('draft, tweak, notifications, creation and task details use Nerd Font markers', () => {
-  const texts = [
+test('draft, tweak, notifications, creation and task details preserve their UI/model boundaries', () => {
+  const uiTexts = [
     buildDraftConfirmationText({
       focus: 'goal',
       originalTopic: 'Icons',
@@ -277,13 +280,27 @@ test('draft, tweak, notifications, creation and task details use Nerd Font marke
       sisyphus: false,
       tasks: goal.taskList!.tasks,
     }),
-    buildGoalCreatedReport({ objective: goal.objective, confirmed: true }),
     buildGoalRunningNotification({ objective: goal.objective, sisyphus: false, autoContinue: true }),
     buildGoalRunningNotification({ objective: goal.objective, sisyphus: true, autoContinue: true }),
-    buildGoalTaskDetailBlock(goal),
   ];
-  for (const [i, text] of texts.entries()) {
+  for (const [i, text] of uiTexts.entries()) {
     assert.match(text, /[\ue000-\uf8ff]/u, `message ${i} must include its new icon`);
     checkWidths(`message-${i}`, new Text(text, 0, 0));
   }
+
+  const modelTexts = [
+    buildGoalCreatedReport({ objective: goal.objective, confirmed: true }),
+    buildGoalTaskDetailBlock(goal),
+  ];
+  for (const [i, text] of modelTexts.entries()) {
+    assert.doesNotMatch(text, /[\ue000-\uf8ff]|[\u{f0000}-\u{f1fff}]/u, `model text ${i} must not include UI glyphs`);
+    for (const width of WIDTHS) {
+      for (const line of new Text(text, 0, 0).render(width)) {
+        assert.ok(visibleWidth(line) <= width, `model-message-${i}@${width} overflow`);
+      }
+    }
+  }
+  assert.match(modelTexts[0]!, /Goal created and focused/);
+  assert.match(modelTexts[1]!, /\[ \]/);
+  assert.match(modelTexts[1]!, /\[x\]/);
 });
