@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { getSupportedThinkingLevels, Type } from '@earendil-works/pi-ai';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import type {
   Context,
   Model,

@@ -1,6 +1,6 @@
 {
   "name": "pi-pulse",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A growing collection of crafted extensions for Pi Coding Agent",
   "type": "module",
   "author": "zhugez",
@@ -73,12 +73,13 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.0",
     "@earendil-works/pi-coding-agent": ">=0.80.0",
-    "@earendil-works/pi-tui": ">=0.80.0"
+    "@earendil-works/pi-tui": ">=0.80.0",
+    "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^1.4.0",
-    "@earendil-works/pi-coding-agent": "^1.4.0",
-    "@earendil-works/pi-tui": "^1.4.0",
+    "@earendil-works/pi-ai": "^1.5.0",
+    "@earendil-works/pi-coding-agent": "^1.5.0",
+    "@earendil-works/pi-tui": "^1.5.0",
     "@types/cross-spawn": "^6.0.6",
     "oxfmt": "^0.74.0",
     "oxlint": "^1.89.0",
@@ -92,7 +93,6 @@
     "@juicesharp/rpiv-i18n": "^2.15.0",
     "@typesafe-ai/sdk": "^0.7.0",
     "cross-spawn": "^7.0.6",
-    "typebox": "^1.4.3",
     "undici": "^8.11.2"
   },
   "bundleDependencies": [

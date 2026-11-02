@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import * as fsPromises from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
@@ -24,6 +24,26 @@ function truncateOutput(text: string, maxLen = MAX_OUTPUT_CHARS): string {
   const half = Math.floor(maxLen / 2);
   const omitted = text.length - maxLen;
   return `${text.slice(0, half)}\n... [${omitted} characters omitted] ...\n${text.slice(-half)}`;
+}
+
+// ponytail: fixed 64 MiB stdout/stderr ceiling per command. Raise it or stream to a file if a
+// snippet legitimately needs more; 256 MiB (pi's default) risks a multi-hundred-MB JS heap.
+const MAX_EXEC_BUFFER_BYTES = 64 * 1024 * 1024;
+
+function makeExecHelper(pi: ExtensionAPI) {
+  return async (cmd: string, args: string[] = []) => {
+    const options = { maxBuffer: MAX_EXEC_BUFFER_BYTES };
+    const res = args.length > 0
+      ? await pi.exec(cmd, args, options)
+      : await pi.exec("bash", ["-c", cmd], options);
+    return {
+      stdout: res.stdout,
+      stderr: res.truncated
+        ? `${res.stderr}\n[pi] command output exceeded ${MAX_EXEC_BUFFER_BYTES} bytes; stdout and stderr are incomplete.`
+        : res.stderr,
+      exitCode: res.code,
+    };
+  };
 }
 
 export async function runCodeSnippet(
@@ -174,14 +194,7 @@ export default function registerCodeMode(pi: ExtensionAPI): void {
         details: {},
       });
 
-      const execHelper = async (cmd: string, args: string[] = []) => {
-        const res = args.length > 0 ? await pi.exec(cmd, args) : await pi.exec("bash", ["-c", cmd]);
-        return {
-          stdout: res.stdout,
-          stderr: res.stderr,
-          exitCode: res.code,
-        };
-      };
+      const execHelper = makeExecHelper(pi);
 
       try {
         const execution = await runCodeSnippet(params.code, {
@@ -217,10 +230,7 @@ export default function registerCodeMode(pi: ExtensionAPI): void {
       }
 
       try {
-        const execHelper = async (cmd: string, cmdArgs: string[] = []) => {
-          const res = cmdArgs.length > 0 ? await pi.exec(cmd, cmdArgs) : await pi.exec("bash", ["-c", cmd]);
-          return { stdout: res.stdout, stderr: res.stderr, exitCode: res.code };
-        };
+        const execHelper = makeExecHelper(pi);
 
         const execution = await runCodeSnippet(code, {
           cwd: ctx.cwd,

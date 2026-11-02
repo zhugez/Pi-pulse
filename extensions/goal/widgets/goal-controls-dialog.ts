@@ -322,7 +322,7 @@ export async function showGoalControls(core: GoalCore, ctx: ExtensionContext, sc
 	if (!ctx.hasUI) { ctx.ui.notify("Open /goal-settings controls in an interactive Pi session to customize controls.", "info"); return false; }
 	core.enterGoalModal();
 	let reload: "reload" | undefined;
-	try { reload = await ctx.ui.custom((tui, theme, keymap, done) => new GoalControlsDialog(core, ctx, tui, theme, keymap, done, scope)); }
+	try { reload = await ctx.ui.custom((tui, theme, keymap, done) => new GoalControlsDialog(core, ctx, tui, theme, keymap, done, scope), { blocked: { kind: "question", message: "Goal settings controls" } }); }
 	finally { core.exitGoalModal(); }
 	if (reload && "reload" in ctx) { await (ctx as ExtensionContext & { reload(): Promise<void> }).reload(); return true; }
 	return false;

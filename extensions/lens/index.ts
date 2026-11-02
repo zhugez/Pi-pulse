@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import * as fsPromises from "node:fs/promises";
 import * as path from "node:path";
 import { checkFileDiagnostics, formatDiagnostics } from "./diagnostics.ts";

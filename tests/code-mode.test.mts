@@ -140,3 +140,29 @@ test("code-mode: registers tool and slash command with pi extension API", () => 
   assert.equal(commands.length, 1);
   assert.equal(commands[0].name, "code-exec");
 });
+
+test("code-mode: exec caps buffered output and reports truncation", async () => {
+  const calls: any[] = [];
+  const tools: any[] = [];
+  const fakePi: any = {
+    registerTool: (tool: any) => tools.push(tool),
+    registerCommand: () => {},
+    exec: async (cmd: string, args: string[], options: any) => {
+      calls.push({ cmd, args, options });
+      return { stdout: "partial", stderr: "", code: 0, truncated: true };
+    },
+  };
+
+  registerCodeMode(fakePi);
+
+  const result = await tools[0].execute(
+    "call-1",
+    { code: `return await exec("cat", ["big.log"]);` },
+    undefined,
+    undefined,
+    { cwd: process.cwd() },
+  );
+
+  assert.equal(calls[0].options.maxBuffer, 64 * 1024 * 1024);
+  assert.match(result.content[0].text, /output exceeded 67108864 bytes; stdout and stderr are incomplete/);
+});

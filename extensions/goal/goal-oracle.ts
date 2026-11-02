@@ -16,7 +16,7 @@
  *   - every phase is durably recorded in the ledger with bounded payloads.
  */
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createHash } from "node:crypto";
 
 import { defineTool, SessionManager, SettingsManager, type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";

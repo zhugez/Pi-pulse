@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Context, Message, Tool } from '@earendil-works/pi-ai';
-import { Type } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import {
   PROVIDER_ID,
   GEMINI_WEB_API,

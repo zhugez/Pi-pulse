@@ -7,7 +7,8 @@
  * status/evidence/timestamps for matching ids.
  */
 
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "../shared/string-enum.ts";
+import { Type } from "typebox";
 import { defineTool, type AgentToolResult, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 

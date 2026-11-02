@@ -1,5 +1,5 @@
 import type { AgentToolResult, ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as os from "node:os";

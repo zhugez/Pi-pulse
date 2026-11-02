@@ -1,7 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Static } from "@earendil-works/pi-ai";
-import { Type } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,

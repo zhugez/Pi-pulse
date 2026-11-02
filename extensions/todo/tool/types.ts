@@ -1,5 +1,5 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
+import { StringEnum } from "../../shared/string-enum.ts";
 
 // ---------------------------------------------------------------------------
 // Tool / command identity — verbatim string boundaries.

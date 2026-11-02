@@ -4,7 +4,8 @@
  * and `/antigravity.image` without registering `generate_image`.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "../../shared/string-enum.ts";
+import { Type } from "typebox";
 import {
   DEFAULT_IMAGE_MODEL,
   generateAntigravityImage,
