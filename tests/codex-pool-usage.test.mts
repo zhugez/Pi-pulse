@@ -127,16 +127,41 @@ test("codex-pool never refreshes tokens or queries expired/login-required accoun
   assert.equal(http.mock.callCount(), 0);
 });
 
+test("a deactivated workspace stays inline without hiding healthy pool accounts", async (t) => {
+  t.mock.method(AccountStore.prototype, "read", async () => ({ version: 1, accounts: [
+    { id: "bad", credential: { access: "token-bad", expires: Date.now() + 60000 } },
+    { id: "good", credential: { access: "token-good", expires: Date.now() + 60000 } },
+  ] }));
+  const http = t.mock.method(globalThis, "fetch", async (_url: unknown, options?: RequestInit) =>
+    new Headers(options?.headers).get("Authorization") === "Bearer token-bad"
+      ? new Response(JSON.stringify({ error: { code: "deactivated_workspace", message: "Payment Required" } }), { status: 402 })
+      : new Response(JSON.stringify({ rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000 } } })));
+  const data = await cfg().fetchUsage();
+  assert.equal(http.mock.callCount(), 2);
+  assert.equal(data.accounts?.length, 2);
+  assert.deepEqual(data.windows, { "Account 2 5h": 25 });
+  for (const theme of [undefined, { fg: (_color: string, text: string) => `\u001b[32m${text}\u001b[0m` }]) {
+    const output = formatUsageDetails(data, "codex-pool", { theme });
+    assert.match(output, /Account 1/);
+    assert.match(output, /HTTP 402.*deactivated_workspace/);
+    assert.match(output, /Account 2/);
+    assert.match(output, /25%/);
+  }
+  const theme = { fg: (_color: string, text: string) => text };
+  assert.match(renderCodexPoolFooter(data, theme, "bad"), /⚠ HTTP 402/);
+  assert.match(renderCodexPoolFooter(data, theme, "good"), /25%/);
+});
+
 test("codex-pool errors redact tokens and cancellation reaches requests", async (t) => {
   t.mock.method(AccountStore.prototype, "read", async () => ({ version: 1, accounts: [
     { id: "aaaaaaaaaaaa", credential: { access: "private-token", accountId: "a", expires: Date.now() + 60000 } },
   ] }));
   const controller = new AbortController();
   const http = t.mock.method(globalThis, "fetch", async () => new Response("private-token", { status: 401 }));
-  await assert.rejects(cfg().fetchUsage(controller.signal), (error: Error) => {
-    assert.doesNotMatch(error.message, /private-token/);
-    return true;
-  });
+  const data = await cfg().fetchUsage(controller.signal);
+  assert.match(data.accounts?.[0].error ?? "", /HTTP 401/);
+  assert.doesNotMatch(JSON.stringify(data), /private-token/);
   controller.abort();
   assert.equal(http.mock.calls[0].arguments[1]?.signal?.aborted, true);
+  await assert.rejects(cfg().fetchUsage(controller.signal), { name: "AbortError" });
 });

@@ -9,6 +9,7 @@ export interface AccountUsageItem {
 	name?: string;
 	active?: boolean;
 	cooldown?: boolean;
+	error?: string;
 	plan?: string;
 	windows: Record<string, number>;
 	resets?: Record<string, number>;
@@ -84,6 +85,7 @@ function normalizeAccounts(value: unknown): AccountUsageItem[] | undefined {
 			...(typeof rec.name === "string" ? { name: rec.name } : {}),
 			active: Boolean(rec.active),
 			cooldown: Boolean(rec.cooldown),
+			...(typeof rec.error === "string" ? { error: rec.error } : {}),
 			...(plan ? { plan } : {}),
 			windows,
 			...(resets ? { resets } : {}),

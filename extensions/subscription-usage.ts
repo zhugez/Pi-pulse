@@ -704,7 +704,7 @@ function renderCompactUsage({ normalized, providerId, options, now, c }: UsageRe
 
 		const accountRows = sortedAccounts.map((acc) => {
 			const stateColor: CtpColor = acc.active ? 'green' : acc.cooldown ? 'yellow' : 'sapphire';
-			const rawIcon = acc.active ? '●' : acc.cooldown ? '⏳' : '○';
+			const rawIcon = acc.error ? '⚠' : acc.active ? '●' : acc.cooldown ? '⏳' : '○';
 			const icon = c(stateColor, rawIcon);
 			const idText = c(acc.active ? 'text' : 'subtext0', (acc.name ?? acc.id).padEnd(maxIdLen));
 			const bRaw = badgeLabel(acc).padEnd(maxBadgeLen);
@@ -715,7 +715,9 @@ function renderCompactUsage({ normalized, providerId, options, now, c }: UsageRe
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
 			});
-			const cells: { text: string; width: number }[] = [];
+			const cells: { text: string; width: number }[] = acc.error
+				? [{ text: c('yellow', acc.error), width: visibleWidth(acc.error) }]
+				: [];
 			for (const key of keys) {
 				const percent = acc.windows[key];
 				if (typeof percent !== 'number') continue;
@@ -825,7 +827,8 @@ function renderPlainUsage({ normalized, providerId, options, now }: UsageRenderC
 			const icon = acc.active ? '\u25CF' : acc.cooldown ? '\u23F3' : '\u25CB';
 			const status = acc.active ? 'active' : acc.cooldown ? 'cooldown' : 'standby';
 			const planText = acc.plan ? ` \u2022 ${acc.plan}` : '';
-			lines.push(`${icon} ${acc.id} [${status}${planText}]`);
+			lines.push(`${acc.error ? '⚠' : icon} ${acc.name ?? acc.id} [${status}${planText}]`);
+			if (acc.error) lines.push(`  ${acc.error}`);
 			const keys = Object.keys(acc.windows).sort((a, b) => {
 				const order = detailWindowOrder(a) - detailWindowOrder(b);
 				return order !== 0 ? order : a.localeCompare(b);
@@ -1378,9 +1381,22 @@ export const codexPoolCfg: ProviderCfg = {
 			const index = accounts.indexOf(account);
 			const name = names[index];
 			const labelName = names.filter((label) => label === name).length > 1 ? `${name} (Account ${index + 1})` : name;
-			const data = await fetchCodexUsage(account.credential.access, signal,
-				typeof account.credential.accountId === "string" ? account.credential.accountId : undefined);
-			accountUsage.push({ id: account.id, name: labelName, plan: data.plan, active: account.id === (usable.some((a) => a.id === preferred) ? preferred : usable[0].id), windows: data.windows, resets: data.resets });
+			const active = account.id === (usable.some((a) => a.id === preferred) ? preferred : usable[0].id);
+			let data: UsageData;
+			try {
+				data = await fetchCodexUsage(account.credential.access, signal,
+					typeof account.credential.accountId === "string" ? account.credential.accountId : undefined);
+			} catch (error) {
+				signal?.throwIfAborted();
+				let message = error instanceof Error ? error.message : "Usage request failed";
+				for (const secret of [account.credential.access, account.credential.refresh]) {
+					if (secret) message = message.replaceAll(secret, "[REDACTED]");
+				}
+				message = message.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+				accountUsage.push({ id: account.id, name: labelName, active, windows: {}, error: message });
+				continue;
+			}
+			accountUsage.push({ id: account.id, name: labelName, plan: data.plan, active, windows: data.windows, resets: data.resets });
 			for (const [key, percent] of Object.entries(data.windows)) {
 				const label = `${labelName} ${key}`;
 				windows[label] = percent;
@@ -1400,7 +1416,7 @@ export function renderCodexPoolFooter(data: UsageData, theme: { fg(color: string
 	const short = name.split("@")[0];
 	const label = accounts.filter((item) => (item.name ?? "Account").split("@")[0] === short).length > 1 ? name : short;
 	const nameTag = isColorTheme(theme) ? ctp("subtext0", label) : theme.fg("muted", label);
-	return joinParts([nameTag, codexCfg.render(account, theme, undefined, style)].filter(Boolean), theme);
+	return joinParts([nameTag, account.error ? theme.fg("warning", `⚠ ${account.error}`) : codexCfg.render(account, theme, undefined, style)].filter(Boolean), theme);
 }
 
 export const alpakyrosPoolCfg: ProviderCfg = {
