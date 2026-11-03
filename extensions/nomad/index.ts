@@ -58,7 +58,7 @@ export default async function opencodeInfinite(pi: ExtensionAPI) {
   });
   gateway.stderr?.on("data", (chunk: Buffer) => {
     const line = chunk.toString().trim();
-    if (line) console.error(`[freeride] ${line}`);
+    if (line) console.error(`[nomad] ${line}`);
   });
   const stop = () => gateway.kill("SIGTERM");
   process.on("exit", stop);
@@ -96,7 +96,7 @@ export default async function opencodeInfinite(pi: ExtensionAPI) {
         const path = action === "rotate" ? "/rotate" : "/health";
         const response = await fetch(`http://127.0.0.1:${port}${path}`);
         const data = (await response.json()) as Record<string, unknown>;
-        ctx.ui.notify(`freeride ${JSON.stringify(data)}`, "info");
+        ctx.ui.notify(`nomad ${JSON.stringify(data)}`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
