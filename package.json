@@ -64,7 +64,7 @@
       "./extensions/goal/goal.ts",
       "./extensions/todo/index.ts",
       "./extensions/advisor/extensions/index.ts",
-      "./extensions/opencode-infinite/index.ts"
+      "./extensions/freeride/index.ts"
     ],
     "skills": [
       "./node_modules/@dietrichgebert/ponytail/skills"
