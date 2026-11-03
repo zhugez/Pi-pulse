@@ -32,11 +32,12 @@ function opencodeSession(): string {
   }
 }
 
-async function waitHealthy(port: number, tries = 60): Promise<boolean> {
+async function waitHealthy(port: number, nonce: string, tries = 60): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`);
-      if (response.ok) return true;
+      // A gateway from another session may already own this port; only our own nonce counts.
+      if (response.ok && ((await response.json()) as { nonce?: string }).nonce === nonce) return true;
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -48,28 +49,36 @@ export default async function opencodeInfinite(pi: ExtensionAPI) {
   const bun = findBun();
   if (!base || !bun) return;
 
-  const port = 40123 + Math.floor(Math.random() * 500);
-  const egress = (process.env.OPENCODE_INFINITE_EGRESS ?? "WARP").toUpperCase();
+  const egress = (process.env.OPENCODE_INFINITE_EGRESS ?? "NONE").toUpperCase();
   const session = process.env.OPENCODE_INFINITE_SESSION ?? opencodeSession();
 
-  const gateway = spawn(bun, ["run", GATEWAY], {
-    env: { ...process.env, OCI_GATEWAY_PORT: String(port), OCI_SESSION: session, OCI_EGRESS: egress },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  gateway.stderr?.on("data", (chunk: Buffer) => {
-    const line = chunk.toString().trim();
-    if (line) console.error(`[nomad] ${line}`);
-  });
-  const stop = () => gateway.kill("SIGTERM");
+  // Random ports collide with gateways left by other sessions; try a few before giving up.
+  let port = 0;
+  let gateway: ReturnType<typeof spawn> | undefined;
+  for (let attempt = 0; attempt < 5 && !gateway; attempt++) {
+    const candidate = 40123 + Math.floor(Math.random() * 20000);
+    const nonce = crypto.randomUUID();
+    const proc = spawn(bun, ["run", GATEWAY], {
+      env: { ...process.env, OCI_GATEWAY_PORT: String(candidate), OCI_SESSION: session, OCI_EGRESS: egress, OCI_NONCE: nonce },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      const line = chunk.toString().trim();
+      if (line) console.error(`[nomad] ${line}`);
+    });
+    if (await waitHealthy(candidate, nonce)) {
+      port = candidate;
+      gateway = proc;
+    } else {
+      proc.kill("SIGTERM");
+    }
+  }
+  if (!gateway) return;
+
+  const stop = () => gateway?.kill("SIGTERM");
   process.on("exit", stop);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-
-  const ready = await waitHealthy(port);
-  if (!ready) {
-    stop();
-    return;
-  }
 
   const endpoint = `http://127.0.0.1:${port}/v1`;
   const models = base.getModels().map((model) => ({ ...model, provider: "opencode", baseUrl: endpoint }));
