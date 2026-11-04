@@ -103,9 +103,13 @@ export default async function nomad(pi: ExtensionAPI) {
     return outer;
   }
 
+  // Only the free tier is served by the public key, and only the completions API is wired here.
+  const models = base.getModels().filter((model) => model.id.endsWith("-free") && model.api === "openai-completions");
+
   const provider = {
     ...base,
     name: "OpenCode (Infinite)",
+    getModels: () => models,
     auth: {
       apiKey: {
         name: "OpenCode free tier",

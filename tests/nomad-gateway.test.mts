@@ -50,12 +50,14 @@ if (process.env.NOMAD_HARNESS === "1") {
     if ((event as { type?: string }).type === "error") break;
   }
   const port = LISTENING.exec(log)?.[1] ?? "";
+  const listed = provider.getModels();
+  const free = listed.length > 0 && listed.every((entry) => entry.id.endsWith("-free"));
   let health = "fail";
   try {
     const response = await fetch(`http://127.0.0.1:${port}/health`);
     if (response.ok && ((await response.json()) as { ok?: boolean }).ok) health = "ok";
   } catch {}
-  console.log(`EAGER=${eager ? "yes" : "no"} PORT=${port} HEALTH=${health}`);
+  console.log(`EAGER=${eager ? "yes" : "no"} PORT=${port} HEALTH=${health} MODELS=${listed.length} FREE=${free ? "yes" : "no"}`);
 }
 
 test("nomad gateway is lazy, does not hold Pi's event loop, and does not outlive it", {
@@ -82,10 +84,12 @@ test("nomad gateway is lazy, does not hold Pi's event loop, and does not outlive
 
   assert.equal(code, 0, `harness must exit on its own, not on the timeout (rc=${code}, ${elapsed}ms)\n${stderr}`);
   assert.ok(elapsed < HARNESS_TIMEOUT_MS, `harness took ${elapsed}ms`);
-  const [eager, port, health] = /EAGER=(\w+) PORT=(\d*) HEALTH=(\w+)/.exec(stdout)?.slice(1) ?? [];
+  const [eager, port, health, models, free] = /EAGER=(\w+) PORT=(\d*) HEALTH=(\w+) MODELS=(\d+) FREE=(\w+)/.exec(stdout)?.slice(1) ?? [];
   assert.equal(eager, "no", `gateway must not start before the first request\n${stdout}${stderr}`);
   assert.equal(health, "ok", `gateway must answer /health once a request arrives\n${stdout}${stderr}`);
   assert.ok(port, `harness must report the gateway port\n${stdout}${stderr}`);
+  assert.ok(Number(models) > 0, `provider must list free models\n${stdout}${stderr}`);
+  assert.equal(free, "yes", `only free completions models may be listed\n${stdout}${stderr}`);
 
   await new Promise((resolve) => setTimeout(resolve, 300));
   await assert.rejects(fetch(`http://127.0.0.1:${port}/health`), "gateway must be killed when Pi exits");
