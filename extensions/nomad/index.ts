@@ -87,7 +87,7 @@ function freeModels(base: Provider): Model<string>[] {
   } catch {}
   // Served by upstream but in neither catalog yet; drop these once a catalog lists them.
   const template = models.get("pulse-alpha-free");
-  if (template) models.set("crouton-alpha-free", { ...template, id: "crouton-alpha-free", name: "Crouton Alpha Free" });
+  if (template && !models.has("crouton-alpha-free")) models.set("crouton-alpha-free", { ...template, id: "crouton-alpha-free", name: "Crouton Alpha Free" });
   return [...models.values()];
 }
 
