@@ -66,6 +66,9 @@ export default async function opencodeInfinite(pi: ExtensionAPI) {
       const line = chunk.toString().trim();
       if (line) console.error(`[nomad] ${line}`);
     });
+    // Keep the gateway out of our event loop: otherwise `pi -p` never exits while it runs.
+    proc.unref();
+    (proc.stderr as unknown as { unref?: () => void } | null)?.unref?.();
     if (await waitHealthy(candidate, nonce)) {
       port = candidate;
       gateway = proc;
@@ -75,7 +78,12 @@ export default async function opencodeInfinite(pi: ExtensionAPI) {
   }
   if (!gateway) return;
 
-  const stop = () => gateway?.kill("SIGTERM");
+  // SIGKILL: SIGTERM can be swallowed while the runtime is already tearing down, which orphans the gateway.
+  const stop = () => {
+    try {
+      gateway?.kill("SIGKILL");
+    } catch {}
+  };
   process.on("exit", stop);
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
