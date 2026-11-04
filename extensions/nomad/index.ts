@@ -1,9 +1,9 @@
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 const BUN_CANDIDATES = [join(homedir(), ".bun/bin/bun"), "/usr/local/bin/bun", "/usr/bin/bun"];
@@ -72,6 +72,22 @@ function failure(model: Model<string>, message: string): AssistantMessage {
   };
 }
 
+function freeModels(base: Provider): Model<string>[] {
+  const usable = (model: { id: string; api: string; type?: string }) =>
+    model.id.endsWith("-free") && model.api === "openai-completions" && (model.type ?? "chat") === "chat";
+  const models = new Map<string, Model<string>>();
+  for (const model of base.getModels()) if (usable(model)) models.set(model.id, model);
+  // Pi refreshes its own catalog from upstream while the bundled one lags behind; list the union so
+  // free models that only the refreshed catalog knows about stay pickable.
+  try {
+    const store = JSON.parse(readFileSync(join(getAgentDir(), "models-store.json"), "utf8"));
+    for (const model of store?.opencode?.models ?? []) {
+      if (usable(model) && !models.has(model.id)) models.set(model.id, model as Model<string>);
+    }
+  } catch {}
+  return [...models.values()];
+}
+
 export default async function nomad(pi: ExtensionAPI) {
   const base = builtinProviders().find((provider) => provider.id === "opencode");
   const bun = findBun();
@@ -103,8 +119,7 @@ export default async function nomad(pi: ExtensionAPI) {
     return outer;
   }
 
-  // Only the free tier is served by the public key, and only the completions API is wired here.
-  const models = base.getModels().filter((model) => model.id.endsWith("-free") && model.api === "openai-completions");
+  const models = freeModels(base);
 
   const provider = {
     ...base,
