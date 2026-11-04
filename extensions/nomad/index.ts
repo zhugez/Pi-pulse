@@ -2,6 +2,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { createAssistantMessageEventStream, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
@@ -29,19 +30,13 @@ async function waitHealthy(port: number, nonce: string, tries = 60): Promise<boo
   return false;
 }
 
-export default async function nomad(pi: ExtensionAPI) {
-  const base = builtinProviders().find((provider) => provider.id === "opencode");
-  const bun = findBun();
-  if (!base || !bun) return;
-
+async function startGateway(bun: string): Promise<number> {
   // Random ports collide with gateways left by other sessions; try a few before giving up.
-  let port = 0;
-  let gateway: ReturnType<typeof spawn> | undefined;
-  for (let attempt = 0; attempt < 5 && !gateway; attempt++) {
-    const candidate = 40123 + Math.floor(Math.random() * 20000);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const port = 40123 + Math.floor(Math.random() * 20000);
     const nonce = crypto.randomUUID();
     const proc = spawn(bun, ["run", GATEWAY], {
-      env: { ...process.env, OCI_GATEWAY_PORT: String(candidate), OCI_NONCE: nonce },
+      env: { ...process.env, OCI_GATEWAY_PORT: String(port), OCI_NONCE: nonce },
       stdio: ["ignore", "ignore", "pipe"],
     });
     proc.stderr?.on("data", (chunk: Buffer) => {
@@ -51,27 +46,62 @@ export default async function nomad(pi: ExtensionAPI) {
     // Keep the gateway out of our event loop: otherwise `pi -p` never exits while it runs.
     proc.unref();
     (proc.stderr as unknown as { unref?: () => void } | null)?.unref?.();
-    if (await waitHealthy(candidate, nonce)) {
-      port = candidate;
-      gateway = proc;
-    } else {
-      proc.kill("SIGTERM");
+    if (await waitHealthy(port, nonce)) {
+      // SIGKILL: SIGTERM can be swallowed while the runtime is already tearing down, which orphans the gateway.
+      const stop = () => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      };
+      process.on("exit", stop);
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      return port;
     }
+    proc.kill("SIGTERM");
   }
-  if (!gateway) return;
+  throw new Error("nomad: gateway did not start");
+}
 
-  // SIGKILL: SIGTERM can be swallowed while the runtime is already tearing down, which orphans the gateway.
-  const stop = () => {
-    try {
-      gateway?.kill("SIGKILL");
-    } catch {}
+function failure(model: Model<string>, message: string): AssistantMessage {
+  return {
+    role: "assistant", content: [], api: model.api, provider: "opencode", model: model.id,
+    timestamp: Date.now(), stopReason: "error", errorMessage: message,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   };
-  process.on("exit", stop);
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+}
 
-  const endpoint = `http://127.0.0.1:${port}/v1`;
-  const models = base.getModels().map((model) => ({ ...model, provider: "opencode", baseUrl: endpoint }));
+export default async function nomad(pi: ExtensionAPI) {
+  const base = builtinProviders().find((provider) => provider.id === "opencode");
+  const bun = findBun();
+  if (!base || !bun) return;
+
+  // Lazy: nothing is spawned until an opencode request actually arrives.
+  let endpoint: Promise<string> | undefined;
+  function ensure(): Promise<string> {
+    endpoint ??= startGateway(bun as string).then((port) => `http://127.0.0.1:${port}/v1`);
+    const current = endpoint;
+    current.catch(() => {
+      if (endpoint === current) endpoint = undefined;
+    });
+    return current;
+  }
+
+  function relay(model: Model<string>, open: (baseUrl: string) => AsyncIterable<unknown>): ReturnType<typeof createAssistantMessageEventStream> {
+    const outer = createAssistantMessageEventStream();
+    void (async () => {
+      try {
+        const baseUrl = await ensure();
+        for await (const event of open(baseUrl)) outer.push(event as Parameters<typeof outer.push>[0]);
+      } catch (error) {
+        outer.push({ type: "error", reason: "error", error: failure(model, error instanceof Error ? error.message : String(error)) });
+      } finally {
+        outer.end();
+      }
+    })();
+    return outer;
+  }
 
   const provider = {
     ...base,
@@ -83,16 +113,23 @@ export default async function nomad(pi: ExtensionAPI) {
         resolve: async () => ({ auth: { apiKey: "public" }, source: "public" }),
       },
     },
-    getModels: () => models,
+    stream: (model: Model<string>, context: never, options: never) =>
+      relay(model, (baseUrl) => base.stream({ ...model, baseUrl } as Model<never>, context, options)),
+    streamSimple: (model: Model<string>, context: never, options: never) =>
+      relay(model, (baseUrl) => base.streamSimple({ ...model, baseUrl } as Model<never>, context, options)),
   };
-  (pi.registerProvider as (value: unknown) => void)(provider);
+  (pi.registerProvider as (value: unknown) => void)(provider satisfies Provider);
 
   pi.registerCommand("opencode", {
     description: "nomad: status",
-    handler: async (args, ctx) => {
+    handler: async (_args, ctx) => {
+      if (!endpoint) {
+        ctx.ui.notify("nomad: gateway not started; it starts on the first opencode request.", "info");
+        return;
+      }
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/health`);
-        ctx.ui.notify(`nomad ${JSON.stringify(await response.json())}`, "info");
+        const url = (await endpoint).replace(/\/v1$/, "/health");
+        ctx.ui.notify(`nomad ${JSON.stringify(await (await fetch(url)).json())}`, "info");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
