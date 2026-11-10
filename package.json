@@ -67,7 +67,8 @@
       "./extensions/nomad/index.ts"
     ],
     "skills": [
-      "./node_modules/@dietrichgebert/ponytail/skills"
+      "./node_modules/@dietrichgebert/ponytail/skills",
+      "./skills"
     ]
   },
   "license": "GPL-3.0-only",
