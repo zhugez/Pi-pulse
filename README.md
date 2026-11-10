@@ -22,6 +22,7 @@ The collection currently includes two observability extensions, integrated model
 - **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
+- **Stella** — `/skill:stella` rewrites ambiguous technical English using ASD-STE100-inspired rules, with a bundled linter for structural checks.
 - **Goal** — `/goal` conversational goal planning with tasks, subtasks, persistent progress, and an independent completion auditor.
 - **Todo** — a persistent `todo` tool, `/todos`, and a live task panel above the editor.
 - **Advisor** — an on-demand second opinion through `ask_advisor` and configurable review gates, on a separate model.
@@ -102,6 +103,7 @@ A programmable execution tool for Pi. Instead of making multiple sequential tool
 Native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro subscription) directly integrated into Pi. No external proxy daemon, local proxy server, or `codex-lb` dependency needed.
 
 Features:
+
 - **Multiple accounts**: Link multiple ChatGPT Plus/Pro subscriptions using Pi's standard native OAuth flow.
 - **Automatic failover**: Bounded failover across available accounts when hitting quota limits (HTTP 429, `usage_limit_reached`, `rate_limit_exceeded`) or authentication failures (HTTP 401/403), respecting upstream `Retry-After` headers and `resets_at` timestamps.
 - **Replay suppression**: Replay is strictly suppressed once any meaningful stream output (text, thinking, or tool calls) has been emitted, preventing duplicate actions.
@@ -208,6 +210,7 @@ Model availability depends on the signed-in Google account. It is an unofficial 
 Native zero-bridge provider connecting Pi directly to Gemini Web via Google Web RPC. Does not require Go, external bridge processes, or browser automation.
 
 Features:
+
 - **Private cookie auth**: Import cookie headers directly from a `0600` private file for any Google account slot (`/u/N/`).
 - **Dynamic model discovery**: Discovers available account models dynamically from Gemini Web catalog RPCs.
 - **Prompt-based tool calling**: Translates Pi tool declarations into structured prompts and parses responses with Pi's TypeBox schema validation.
@@ -244,6 +247,12 @@ See the [Gemini Web Provider Reference](extensions/gemini-web/README.md) for com
 `/pnt-opt` is not a plain alias: before running the audit it takes a `crapper --no-coverage` snapshot of the scope and hands the audit the worst five functions by cyclomatic complexity, so "this is too complex" starts from a number instead of an opinion. Without `crapper` on `PATH` (or `PI_CRAPPER`), the command behaves exactly as before. The snapshot costs ~1.5 s on this repo's `extensions/`.
 
 The persisted default mode is stored in `~/.config/ponytail/config.json` (or `$XDG_CONFIG_HOME/ponytail/`).
+
+### Stella
+
+`/skill:stella` rewrites ambiguous or dense English for technical instructions, tool descriptions, error messages, prompts, and agent-to-agent text. It preserves the source meaning and uncertainty. It does not claim certified ASD-STE100 compliance or include the restricted official dictionary.
+
+Run the bundled structural linter with `python3 <skill-dir>/scripts/ste-lint.py <file>`.
 
 ### Goal
 
