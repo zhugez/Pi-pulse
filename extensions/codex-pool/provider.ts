@@ -100,7 +100,7 @@ function snapshotEvent(event: AssistantMessageEvent, previous?: AssistantMessage
 }
 
 function quotaError(message: string): boolean {
-  return /\b(?:usage_limit_reached|usage_not_included|rate_limit_exceeded)\b/i.test(message);
+  return /\b(?:usage_limit_reached|usage_not_included|rate_limit_exceeded|server_is_overloaded|slow_down)\b/i.test(message);
 }
 
 export function cooldownUntil(headers: Headers, resetAt?: number, now = Date.now()): number {
@@ -441,7 +441,7 @@ export function createCodexPool(
             return;
           }
           committed ||= terminal ? meaningful(terminal) : meaningful({ type: 'error', error: output, reason: 'error' });
-          const quota = status === 429 || quotaError(code) || quotaError(output.errorMessage ?? '');
+          const quota = status === 429 || status === 529 || quotaError(code) || quotaError(output.errorMessage ?? '');
           const auth = !quota && (status === 401 || status === 403);
           if (quota || auth) {
             await store.update((data) => {
@@ -459,7 +459,7 @@ export function createCodexPool(
           if (!quota && !auth) {
             // Preserve context-overflow handling, but not raw error payloads/secrets.
             const overflow = /context_length_exceeded|maximum context length/i.test(output.errorMessage ?? '');
-            const detail = [status && `HTTP ${status}`, code && code.slice(0, 80)].filter(Boolean).join(', ');
+            const detail = [status && `HTTP ${status}`, code && code.slice(0, 80)].filter(Boolean).join(', ') || output.errorMessage;
             finish(
               overflow
                 ? 'context_length_exceeded'
@@ -497,12 +497,13 @@ export function createCodexPool(
         }
         finish(exhaustionMessage, false, diagnostics);
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
         finish(
           options?.signal?.aborted
             ? 'Codex request cancelled.'
             : error instanceof PoolError
               ? error.message
-              : 'Codex pool operation failed; no account replay performed.',
+              : `Codex pool operation failed (${detail}); no account replay performed.`,
           !!options?.signal?.aborted,
         );
       } finally {

@@ -76,21 +76,26 @@ export function createPoolStream(accounts: Account[], delegate = builtinProvider
           }
           const quota = status === 429;
           const auth = status === 401 || status === 403;
+          const serverError = status >= 500 || status === 408 || status === 0;
           if (quota) account.cooldownUntil = Date.now() + retryMs;
           if (auth) account.disabled = true;
-          if (committed || !terminal || (!quota && !auth)) {
+          if (serverError) account.cooldownUntil = Date.now() + 5_000;
+          const isRetryable = (quota || auth || serverError) && !committed;
+          if (!isRetryable || !terminal) {
             const overflow = /context_length_exceeded|maximum context length/i.test(output.errorMessage ?? "");
+            const detail = output.errorMessage || (status ? `HTTP ${status}` : "Network timeout/connection drop");
             fail(committed ? "Alpakyros stream interrupted; replay suppressed." :
-              overflow ? "context_length_exceeded" : "Alpakyros request failed; no account replay performed.");
+              overflow ? "context_length_exceeded" : `Alpakyros request failed (${detail}); no account replay performed.`);
             return;
           }
           // Failed attempts had no content. The next key gets at most one attempt.
           preferred = (index + 1) % accounts.length;
         }
         fail("Alpakyros pool exhausted: keys require replacement or are cooling down.");
-      } catch {
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
         fail(options?.signal?.aborted ? "Alpakyros request cancelled." :
-          "Alpakyros request failed; no account replay performed.", !!options?.signal?.aborted);
+          `Alpakyros request failed (${detail}); no account replay performed.`, !!options?.signal?.aborted);
       } finally { outer.end(); }
     })();
     return outer;
