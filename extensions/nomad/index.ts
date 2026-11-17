@@ -30,7 +30,7 @@ async function waitHealthy(port: number, nonce: string, tries = 60): Promise<boo
   return false;
 }
 
-async function startGateway(bun: string): Promise<number> {
+async function startGateway(bun: string): Promise<{ port: number; nonce: string }> {
   // Random ports collide with gateways left by other sessions; try a few before giving up.
   for (let attempt = 0; attempt < 5; attempt++) {
     const port = 40123 + Math.floor(Math.random() * 20000);
@@ -56,7 +56,7 @@ async function startGateway(bun: string): Promise<number> {
       process.on("exit", stop);
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
-      return port;
+      return { port, nonce };
     }
     proc.kill("SIGTERM");
   }
@@ -97,9 +97,9 @@ export default async function nomad(pi: ExtensionAPI) {
   if (!base || !bun) return;
 
   // Lazy: nothing is spawned until an opencode request actually arrives.
-  let endpoint: Promise<string> | undefined;
-  function ensure(): Promise<string> {
-    endpoint ??= startGateway(bun as string).then((port) => `http://127.0.0.1:${port}/v1`);
+  let endpoint: Promise<{ port: number; nonce: string }> | undefined;
+  function ensure(): Promise<{ port: number; nonce: string }> {
+    endpoint ??= startGateway(bun as string);
     const current = endpoint;
     current.catch(() => {
       if (endpoint === current) endpoint = undefined;
@@ -111,7 +111,8 @@ export default async function nomad(pi: ExtensionAPI) {
     const outer = createAssistantMessageEventStream();
     void (async () => {
       try {
-        const baseUrl = await ensure();
+        const { port } = await ensure();
+        const baseUrl = `http://127.0.0.1:${port}/v1`;
         for await (const event of open(baseUrl)) outer.push(event as Parameters<typeof outer.push>[0]);
       } catch (error) {
         outer.push({ type: "error", reason: "error", error: failure(model, error instanceof Error ? error.message : String(error)) });
@@ -143,15 +144,25 @@ export default async function nomad(pi: ExtensionAPI) {
   (pi.registerProvider as (value: unknown) => void)(provider satisfies Provider);
 
   pi.registerCommand("opencode", {
-    description: "nomad: status",
-    handler: async (_args, ctx) => {
-      if (!endpoint) {
+    description: "nomad: status | rotate (OPENCODE_INFINITE_EGRESS=WARP or TOR)",
+    handler: async (args, ctx) => {
+      const action = args.trim() || "status";
+      if (action !== "status" && action !== "rotate") {
+        ctx.ui.notify("Usage: /opencode [status|rotate]", "error");
+        return;
+      }
+      if (!endpoint && action === "status") {
         ctx.ui.notify("nomad: gateway not started; it starts on the first opencode request.", "info");
         return;
       }
       try {
-        const url = (await endpoint).replace(/\/v1$/, "/health");
-        ctx.ui.notify(`nomad ${JSON.stringify(await (await fetch(url)).json())}`, "info");
+        const { port, nonce } = await ensure();
+        const response = await fetch(`http://127.0.0.1:${port}/${action === "rotate" ? "rotate" : "health"}`, {
+          method: action === "rotate" ? "POST" : "GET",
+          headers: { "x-nomad-nonce": nonce },
+          signal: AbortSignal.timeout(90000),
+        });
+        ctx.ui.notify(`nomad ${JSON.stringify(await response.json())}`, response.ok ? "info" : "error");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { Database } from "bun:sqlite";
+import { createEgress } from "./egress.ts";
 
 const UPSTREAM = "https://opencode.ai/inference/openai";
 const PORT = Number(process.env.OCI_GATEWAY_PORT ?? 40123);
@@ -26,6 +27,7 @@ function sessionFromDb(): string {
 const SESSION = process.env.OCI_SESSION || sessionFromDb();
 // Echoed by /health so a launcher can tell its own gateway from one already on that port.
 const NONCE = process.env.OCI_NONCE ?? "";
+const egress = createEgress();
 
 // Native client shape captured from `opencode --standalone run`. The free tier only serves
 // requests that carry this system prompt and tool set; anything else gets FreeUsageLimitError.
@@ -120,11 +122,12 @@ async function forward(path: string, req: Request): Promise<Response> {
     );
   }
   const body = isChat ? patchBody(raw, dir) : raw;
-  const response = await fetch(`${UPSTREAM}${path}`, {
+  const response = await egress.send(() => egress.fetch(`${UPSTREAM}${path}`, {
     method: req.method,
     headers: outHeaders(req.headers),
     body: req.method === "GET" || req.method === "HEAD" ? undefined : body,
-  });
+    signal: req.signal,
+  }));
   if (!isChat || response.status !== 200 || clientWantsStream(raw)) return response;
   return Response.json(aggregateSse(await response.text(), modelId(body)));
 }
@@ -200,9 +203,19 @@ if (import.meta.main) Bun.serve({
   idleTimeout: 255,
   async fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === "/health") return Response.json({ ok: true, nonce: NONCE, session: SESSION });
+    if (url.pathname === "/health") return Response.json({ ok: true, nonce: NONCE, session: SESSION, ...egress.status() });
+    if (url.pathname === "/rotate") {
+      if (req.method !== "POST") return new Response("Use POST", { status: 405, headers: { Allow: "POST" } });
+      if (!NONCE || req.headers.get("x-nomad-nonce") !== NONCE) return new Response("Forbidden", { status: 403 });
+      try {
+        const ip = await egress.rotate();
+        return Response.json({ ok: true, ip, ...egress.status() });
+      } catch (error) {
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error), ...egress.status() }, { status: 503 });
+      }
+    }
     return forward(url.pathname, req);
   },
 });
 
-if (import.meta.main) console.error(`[gateway] listening on 127.0.0.1:${PORT} session=${SESSION || "none"}`);
+if (import.meta.main) console.error(`[gateway] listening on 127.0.0.1:${PORT} egress=${egress.status().egress} session=${SESSION || "none"}`);

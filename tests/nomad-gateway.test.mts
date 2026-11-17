@@ -19,6 +19,7 @@ function stageGateway(): void {
   if (existsSync(join(compiled, "gateway.ts"))) return;
   const source = join(process.cwd(), "extensions", "nomad");
   cpSync(join(source, "gateway.ts"), join(compiled, "gateway.ts"));
+  cpSync(join(source, "egress.ts"), join(compiled, "egress.ts"));
   cpSync(join(source, "fixtures"), join(compiled, "fixtures"), { recursive: true });
 }
 
