@@ -38,6 +38,83 @@ const BANNED_COOKIE_ATTRS = new Set([
 
 const COOKIE_NAME_REGEX = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
+export function extractCookieFromAnyInput(input: string): { cookieHeader: string; detectedSlot?: number } {
+  let text = input.trim();
+  let detectedSlot: number | undefined;
+
+  // 1. Detect cURL command
+  if (/^curl\s/i.test(text) || text.includes('gemini.google.com')) {
+    const slotMatch = text.match(/gemini\.google\.com\/u\/(\d+)\//i);
+    if (slotMatch) {
+      detectedSlot = parseInt(slotMatch[1], 10);
+    }
+    const cookieHeaderMatch =
+      text.match(/(?:-b|--cookie)\s+['"]([^'"]+)['"]/i) ||
+      text.match(/(?:-b|--cookie)\s+\$['"]([^'"]+)['"]/i) ||
+      text.match(/(?:-H|--header)\s+['"][Cc]ookie:\s*([^'"]+)['"]/i) ||
+      text.match(/(?:-H|--header)\s+\$'[Cc]ookie:\s*([^']+)'/i) ||
+      text.match(/[Cc]ookie:\s*([^\r\n"']+)/i);
+    if (cookieHeaderMatch) {
+      text = cookieHeaderMatch[1].trim();
+    }
+  }
+
+  // 2. Detect JSON array or object (Cookie-Editor / EditThisCookie export format)
+  if (text.startsWith('[') || text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      const list = Array.isArray(parsed)
+        ? parsed
+        : isRecord(parsed) && Array.isArray((parsed as Record<string, unknown>).cookies)
+          ? ((parsed as Record<string, unknown>).cookies as unknown[])
+          : isRecord(parsed)
+            ? Object.entries(parsed as Record<string, unknown>).map(([name, value]) => ({ name, value }))
+            : [];
+      if (list.length > 0) {
+        const parts: string[] = [];
+        for (const item of list) {
+          if (!item || typeof item !== 'object') continue;
+          const rec = item as Record<string, unknown>;
+          const name = String(rec.name || rec.key || '').trim();
+          const value = String(rec.value ?? '').trim();
+          if (name && value && COOKIE_NAME_REGEX.test(name) && !BANNED_COOKIE_ATTRS.has(name.toLowerCase())) {
+            parts.push(`${name}=${value}`);
+          }
+        }
+        text = parts.join('; ');
+      }
+    } catch {
+      // not JSON
+    }
+  }
+
+  // 3. Strip 'Cookie:' prefix if present
+  if (/^cookie:\s*/i.test(text)) {
+    text = text.replace(/^cookie:\s*/i, '').trim();
+  }
+
+  return { cookieHeader: text, detectedSlot };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function parseAnyCookieInput(
+  rawInput: string,
+  explicitAuthUser?: number,
+  now = Date.now(),
+  revision = randomUUID(),
+): CookieCredential {
+  const { cookieHeader, detectedSlot } = extractCookieFromAnyInput(rawInput);
+  const resolvedAuthUser =
+    typeof explicitAuthUser === 'number' && Number.isSafeInteger(explicitAuthUser) && explicitAuthUser >= 0
+      ? explicitAuthUser
+      : (detectedSlot ?? 0);
+
+  return parseCookieImport(cookieHeader, resolvedAuthUser, now, revision);
+}
+
 export function parseCookieImport(
   header: string,
   authUser: number,
@@ -157,7 +234,7 @@ export async function readCookieImport(
     }
     const content = buf.toString('utf8', 0, bytesRead);
     const revision = randomUUID();
-    return parseCookieImport(content, authUser, Date.now(), revision);
+    return parseAnyCookieInput(content, authUser, Date.now(), revision);
   } catch (error) {
     if (error instanceof GeminiWebError) {
       throw error;

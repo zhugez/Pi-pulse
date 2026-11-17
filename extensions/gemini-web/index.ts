@@ -16,6 +16,7 @@ import {
 } from './protocol.js';
 import {
   CookieCredentialStore,
+  parseAnyCookieInput,
   readCookieImport,
 } from './auth.js';
 import {
@@ -209,6 +210,69 @@ export default async function (
     }
   }
 
+  pi.registerCommand('gemini-web.login', {
+    description: 'Quick login for Gemini Web: paste cURL, Cookie-Editor JSON, or raw cookie header',
+    handler: async (args, ctx) => {
+      let rawText = args.trim();
+      if (!rawText) {
+        if (ctx.hasUI) {
+          const input = await ctx.ui.input(
+            'Paste Gemini Web cURL, Cookie-Editor JSON, or Cookie header:',
+            'Right-click gemini.google.com in DevTools -> Copy as cURL, or export from Cookie-Editor',
+          );
+          if (!input || !input.trim()) {
+            emitCommandOutput(ctx, 'Gemini Web login cancelled.', 'info');
+            return;
+          }
+          rawText = input.trim();
+        } else {
+          emitCommandOutput(
+            ctx,
+            'Usage: /gemini-web.login <paste-curl-or-json-or-cookie-string>',
+            'error',
+          );
+          return;
+        }
+      }
+
+      await (ctx as { waitUntilIdle?: () => Promise<void> }).waitUntilIdle?.();
+
+      await runCommand(ctx, async (signal) => {
+        try {
+          const cred = parseAnyCookieInput(rawText);
+          if (client) {
+            client.close();
+            client = undefined;
+          }
+          await store.update(async () => cred, signal);
+          const c = resetClient();
+
+          try {
+            const models = await c.refresh({ signal });
+            registerCurrentProvider(models, true);
+            emitCommandOutput(
+              ctx,
+              `Successfully logged into Gemini Web (account slot ${cred.authUser}, ${models.length} model(s) discovered)! Provider is ready in /model.`,
+            );
+          } catch (refreshErr) {
+            registerCurrentProvider([], true);
+            emitCommandOutput(
+              ctx,
+              `Credentials saved for slot ${cred.authUser}, but model discovery failed: ${safeWebError(refreshErr)}. Run /gemini-web.refresh to retry.`,
+              'warning',
+            );
+          }
+        } catch (err) {
+          emitCommandOutput(
+            ctx,
+            `Failed to parse Gemini Web credentials: ${safeWebError(err)}. Ensure it includes __Secure-1PSID and __Secure-1PSIDTS.`,
+            'error',
+          );
+        }
+      });
+    },
+  });
+
   pi.registerCommand('gemini-web.import', {
     description: 'Import full Google cookie header from a private 0600 file',
     handler: async (args, ctx) => {
@@ -219,7 +283,7 @@ export default async function (
       ) {
         emitCommandOutput(
           ctx,
-          'Usage: /gemini-web.import <private-file-path> --auth-user <N>. Do not pass cookies directly as command arguments.',
+          'Usage: /gemini-web.import <private-file-path> --auth-user <N>. Do not pass cookies directly as command arguments (use /gemini-web.login instead).',
           'error',
         );
         return;
@@ -267,13 +331,13 @@ export default async function (
             registerCurrentProvider(models, true);
             emitCommandOutput(
               ctx,
-              `Imported Gemini Web session (slot ${authUser}, ${models.length} model(s) discovered). Provider is ready in /model.`,
+              `Imported Gemini Web session (slot ${cred.authUser}, ${models.length} model(s) discovered). Provider is ready in /model.`,
             );
           } catch (refreshErr) {
             registerCurrentProvider([], true);
             emitCommandOutput(
               ctx,
-              `Imported credentials saved for slot ${authUser}, but initial verification failed: ${safeWebError(refreshErr)}. Run /gemini-web.refresh to retry.`,
+              `Imported credentials saved for slot ${cred.authUser}, but initial verification failed: ${safeWebError(refreshErr)}. Run /gemini-web.refresh to retry.`,
               'warning',
             );
           }

@@ -202,10 +202,10 @@ export function safeWebError(error: unknown): string {
   return 'Gemini Web operation failed.';
 }
 
-const accessTokenRegex = /"SNlM0e":"([^"\\]*(?:\\.[^"\\]*)*)"/;
-const accessTokenFallbackRegex = /\["SNlM0e","([^"\\]*(?:\\.[^"\\]*)*)"\]/;
-const escapedAccessTokenRegex = /\\"SNlM0e\\":\\"([^"\\]*(?:\\.[^"\\]*)*)\\"/;
-const escapedAccessTokenFallbackRegex = /\[\\"SNlM0e\\",\\"([^"\\]*(?:\\.[^"\\]*)*)\\"\]/;
+const accessTokenRegex = /"(?:SNlM0e|thykhd)":"([^"\\]*(?:\\.[^"\\]*)*)"/;
+const accessTokenFallbackRegex = /\["(?:SNlM0e|thykhd)","([^"\\]*(?:\\.[^"\\]*)*)"\]/;
+const escapedAccessTokenRegex = /\\"(?:SNlM0e|thykhd)\\":\\"([^"\\]*(?:\\.[^"\\]*)*)\\"/;
+const escapedAccessTokenFallbackRegex = /\[\\"(?:SNlM0e|thykhd)\\",\\"([^"\\]*(?:\\.[^"\\]*)*)\\"\]/;
 
 const buildLabelRegex = /"cfb2h":"([^"\\]*(?:\\.[^"\\]*)*)"/;
 const escapedBuildLabelRegex = /\\"cfb2h\\":\\"([^"\\]*(?:\\.[^"\\]*)*)\\"/;

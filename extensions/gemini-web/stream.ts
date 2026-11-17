@@ -94,13 +94,15 @@ export function createGeminiWebStream(
         options?.signal?.throwIfAborted();
 
         // Enforce supported options: Web protocol supports only low, medium, and high reasoning effort
-        if (options?.deferred || options?.thinkingBudgets !== undefined) {
+        if (options?.deferred || (options?.thinkingBudgets !== undefined && Object.keys(options.thinkingBudgets).length === 0)) {
           throw new GeminiWebError('unsupported');
         }
 
         let thinkingLevel: WebThinkingLevel = 'low';
         if (options?.reasoning !== undefined) {
-          thinkingLevel = validateWebThinkingLevel(options.reasoning);
+          const rawReasoning = options.reasoning as unknown;
+          const levelToValidate = rawReasoning === 'max' ? 'high' : rawReasoning;
+          thinkingLevel = validateWebThinkingLevel(levelToValidate);
           output.providerThinkingLevel = thinkingLevel;
         }
 

@@ -628,6 +628,34 @@ class GeminiWebClientImpl implements GeminiWebClient {
         throw new GeminiWebError('network');
       }
 
+      if (response.status === 301 || response.status === 302) {
+        const loc = response.headers.get('location');
+        if (loc && (loc === '/app' || loc.startsWith('/app?') || loc.startsWith('https://gemini.google.com/app'))) {
+          await cancelResponseBody(response);
+          const targetUrl = loc.startsWith('/') ? `https://gemini.google.com${loc}` : loc;
+          try {
+            response = await activeFetch(targetUrl, {
+              method: 'GET',
+              headers: {
+                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                Origin: 'https://gemini.google.com',
+                Referer: 'https://gemini.google.com/',
+                'User-Agent': CHROME_USER_AGENT,
+                'X-Same-Domain': '1',
+                Cookie: cred.cookieHeader,
+              },
+              redirect: 'manual',
+              signal,
+            });
+          } catch (error) {
+            if (this.closed) throw new GeminiWebError('closed');
+            if (options?.signal?.aborted) throw options.signal.reason;
+            throw new GeminiWebError('network');
+          }
+        }
+      }
+
       await validateResponseStatus(response);
 
       const html = await this.readBoundedBody(response, 8 * 1024 * 1024, signal);
@@ -1005,7 +1033,7 @@ export function createDefaultFetchTransport(): {
   destroy: () => Promise<void>;
 } {
   const agent = new Agent({
-    maxHeaderSize: 64 * 1024,
+    maxHeaderSize: 128 * 1024,
   });
 
   const customFetch = (input: string | URL | Request, init?: RequestInit) => {
