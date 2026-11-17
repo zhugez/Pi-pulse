@@ -1685,8 +1685,12 @@ async function runAntigravityStream({ stream, model, context, opts }: Antigravit
           response?.status === 429 ||
           (response?.status === 403 &&
             /quota|exhausted|rate.?limit|limit reached/i.test(lastText));
-        if (isQuota) {
-          const waitSeconds = parseResetSeconds(lastText);
+        const isAuthOrTos =
+          response?.status === 401 ||
+          (response?.status === 403 &&
+            /violation of Terms of Service|disabled in this account|permission|denied|forbidden/i.test(lastText));
+        if (isQuota || isAuthOrTos) {
+          const waitSeconds = isAuthOrTos ? 30 * 24 * 3600 : parseResetSeconds(lastText);
           markAccountCooldown(creds.token, waitSeconds * 1000);
           const next = await failoverToNextAccount(triedAccessTokens, model.id);
           if (next) {
