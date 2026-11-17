@@ -134,15 +134,22 @@ Supported providers:
 - OpenCode Go: rolling, weekly, and monthly limits
 - DeepSeek API: account balance and local peak/off-peak timing
 - codex-lb custom providers: effective API-key/pool limits from `/v1/usage`
+- HMS: daily token quota from model-list headers
+- xingchiapi: account balance and today's request count
 
 Usage appears in its own responsive strip below the editor, separate from the throughput footer. Wide terminals retain progress bars; narrow terminals switch to percentages and wrap without dropping quota windows or reset countdowns. Resizing back restores your selected style automatically.
 
 The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. Built-in providers share a disk cache; custom codex-lb quotas stay session-local so identical provider names on different hosts/accounts cannot share quota data.
 
+HMS and xingchiapi models also receive automatic inference checks in every Pi session, regardless of the active provider. The extension checks each configured chat model with an isolated `Reply OK.` request, with at most two concurrent checks and a 30-second timeout per model. It starts the next sweep 60 seconds after the previous sweep completes. These requests can consume tokens and credits. A compact two-column HMS/XINGCHI toolbar shows short model labels, status symbols, and successful response times below the editor. Full model IDs, result age, and polling details remain in `/usage`. An `OK` means the model returned non-empty text during that check, not guaranteed future availability. A failed check means no usable response arrived within the check's limits.
+
+Checks remain session-local. Multiple Pi sessions each send their own checks. `/usage toggle off` stops checks and hides usage. Restoring bars or percentages restarts checks. Closing or reloading Pi cancels the session's checks. No checks run while Pi is closed.
+
 Commands:
 
 ```text
 /usage
+/usage check
 /usage toggle [bars|percent|off]
 /usage refresh [active|<provider>|all]
 ```

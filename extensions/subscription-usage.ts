@@ -2166,60 +2166,167 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 	return parts.join(" · ");
 }
 
+type ModelHealth = { ok?: boolean; elapsed?: number; checkedAt?: number };
+
+/** Compact dock only. Full diagnostics and polling details remain in /usage. */
+export function renderModelHealth(
+	health: ReadonlyMap<string, ModelHealth>,
+	theme: { fg(color: string, text: string): string },
+	width: number,
+): string[] {
+	if (width < 1 || !health.size) return [];
+	const aliases: Record<string, string> = {
+		"hms/deepseek-v4.1-flash-free": "Flash",
+		"xingchiapi/gpt-6.1-sol": "Sol",
+		"xingchiapi/gpt-6-astra": "Astra",
+	};
+	const colored = isColorTheme(theme);
+	const paint = (color: CtpColor, fallback: string, text: string) => colored ? ctp(color, text) : theme.fg(fallback, text);
+	const clean = (value: string) => value.replace(/\p{Cc}/gu, " ");
+	const entries = [...health].map(([key, result]) => {
+		const slash = key.indexOf("/");
+		return { provider: clean(key.slice(0, slash)), id: clean(key.slice(slash + 1)), label: aliases[key] ?? clean(key.slice(slash + 1)), result };
+	});
+	const groups = new Map<string, string[]>();
+	for (const entry of entries) {
+		const { provider, id, result } = entry;
+		const label = entries.some((other) => other !== entry && other.provider === provider && other.label === entry.label) ? id : entry.label;
+		const state = result.ok === undefined ? "○" : result.ok ? "✓" : "!";
+		const color = result.ok === undefined ? "muted" : result.ok ? "success" : "warning";
+		const statusColor: CtpColor = result.ok === undefined ? "overlay1" : result.ok ? "green" : "peach";
+		const timing = result.ok === true && result.elapsed !== undefined
+			? paint("subtext0", "dim", ` ${result.elapsed < 100 ? `${result.elapsed}ms` : `${(result.elapsed / 1000).toFixed(1)}s`}`) : "";
+		const nameColor: CtpColor = result.ok === false ? "peach" : provider === "hms" ? "sky" : "lavender";
+		const item = `${paint(nameColor, "accent", label)} ${paint(statusColor, color, state)}${timing}`;
+		const items = groups.get(provider) ?? [];
+		items.push(item);
+		groups.set(provider, items);
+	}
+	const blocks = [...groups].map(([provider, items]) => {
+		const heading = paint(provider === "hms" ? "sapphire" : "mauve", "accent", provider === "hms" ? "HMS" : provider === "xingchiapi" ? "XINGCHI" : provider);
+		const body = items.join("   ");
+		return { heading, body, items, width: Math.max(visibleWidth(heading), visibleWidth(body)) };
+	});
+	if (blocks.reduce((sum, block) => sum + block.width, 0) + (blocks.length - 1) * 6 <= width) {
+		return ["heading", "body"].map((row) => blocks.map((block, index) => {
+			const text = row === "heading" ? block.heading : block.body;
+			return text + (index < blocks.length - 1 ? " ".repeat(block.width - visibleWidth(text) + 6) : "");
+		}).join(""));
+	}
+	return blocks.flatMap((block) => {
+		const rows = wrapTextWithAnsi(block.heading, width);
+		let line = "";
+		for (const item of block.items) {
+			if (line && visibleWidth(`${line}   ${item}`) > width) { rows.push(...wrapTextWithAnsi(line, width)); line = ""; }
+			line = line ? `${line}   ${item}` : item;
+		}
+		if (line) rows.push(...wrapTextWithAnsi(line, width));
+		return rows;
+	});
+}
+
 export default function (pi: ExtensionAPI) {
 	const cache = new Map<string, ProviderState>();
 	let currentCtx: StatusCtx | undefined;
 	let selectedPoolAccount: string | undefined;
 	let checkAbort: AbortController | undefined;
+	let healthTimer: ReturnType<typeof setTimeout> | undefined;
 	let checkGeneration = 0;
-	let healthText: string | undefined;
-	let healthModel: StatusCtx["model"];
+	const health = new Map<string, ModelHealth>();
+	const healthKey = (model: NonNullable<StatusCtx["model"]>) => `${model.provider}/${model.id}`;
+	function healthLines(): string[] {
+		if (!health.size) return [];
+		const label = (value: string) => value.replace(/\p{Cc}/gu, " ").slice(0, 140);
+		return [`Model checks · ${health.size} models · auto 60s after each sweep · may use credits`,
+			...[...health].map(([key, result]) => `${label(key)}: ${result.ok === undefined ? "checking…" : result.ok ? "OK" : "failed (no usable response)"}` +
+				(result.checkedAt !== undefined ? ` · ${result.elapsed}ms · ${Math.max(0, Math.floor((Date.now() - result.checkedAt) / 1000))}s ago` : ""))];
+	}
+	function renderHealth(ctx: StatusCtx) {
+		if (mode === "off" || !health.size) return;
+		if (ctx.ui.setWidget) ctx.ui.setWidget("usage-model-health", (_tui, theme) => ({
+			invalidate() {},
+			render: (width: number) => mode !== "off" ? renderModelHealth(health, theme, width) : [],
+		}), { placement: "belowEditor" });
+		else ctx.ui.setStatus("usage-model-health", renderModelHealth(health, ctx.ui.theme, 1000).join(" "));
+	}
 	function clearHealth(ctx: StatusCtx) {
 		checkGeneration++;
+		clearTimeout(healthTimer);
+		healthTimer = undefined;
 		checkAbort?.abort();
 		checkAbort = undefined;
-		if (!healthText && !healthModel) return;
-		healthText = undefined;
-		healthModel = undefined;
+		if (!health.size) return;
+		health.clear();
 		ctx.ui.setWidget?.("usage-model-health", undefined, { placement: "belowEditor" });
 		ctx.ui.setStatus("usage-model-health", undefined);
+	}
+	async function probeModels(ctx: StatusCtx, models: NonNullable<StatusCtx["model"]>[]) {
+		if (checkAbort || mode === "off" || !models.length) return;
+		clearTimeout(healthTimer);
+		healthTimer = undefined;
+		const generation = checkGeneration;
+		const controller = new AbortController();
+		checkAbort = controller;
+		for (const model of models) if (!health.has(healthKey(model))) health.set(healthKey(model), {});
+		renderHealth(ctx);
+		let index = 0;
+		// Two workers bound request concurrency. The next sweep starts only after this one settles.
+		const worker = async () => {
+			while (index < models.length && !controller.signal.aborted) {
+				const model = models[index++];
+				const started = Date.now();
+				const request = new AbortController();
+				const signal = anySignal(controller.signal, request.signal);
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let rejectCancelled!: () => void;
+				const cancelled = new Promise<never>((_resolve, reject) => {
+					rejectCancelled = () => reject(new Error("Model check cancelled"));
+					controller.signal.addEventListener("abort", rejectCancelled, { once: true });
+					timer = setTimeout(() => { request.abort(); reject(new Error("Model check timed out")); }, 30_000);
+				});
+				let ok = false;
+				try {
+					const result = await Promise.race([ctx.modelRegistry!.streamSimple(model, {
+						messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
+					}, { maxTokens: 64, signal }).result(), cancelled]);
+					ok = !signal.aborted && ["stop", "length"].includes(result.stopReason) &&
+						result.content.some((part) => part.type === "text" && part.text.trim().length > 0);
+				} catch { /* Never display provider error bodies or credentials. */ }
+				finally {
+					clearTimeout(timer);
+					controller.signal.removeEventListener("abort", rejectCancelled);
+				}
+				if (generation !== checkGeneration || controller.signal.aborted) return;
+				health.set(healthKey(model), { ok, elapsed: Date.now() - started, checkedAt: Date.now() });
+				renderHealth(currentCtx ?? ctx);
+			}
+		};
+		try { await Promise.all([worker(), worker()]); }
+		finally {
+			if (checkAbort === controller) checkAbort = undefined;
+			if (generation === checkGeneration && !controller.signal.aborted) {
+				healthTimer = setTimeout(() => { healthTimer = undefined; if (currentCtx) startHealth(currentCtx); }, 60_000);
+				healthTimer.unref?.();
+			}
+		}
+	}
+	function startHealth(ctx: StatusCtx) {
+		if (mode === "off" || checkAbort || healthTimer) return;
+		const all = ctx.modelRegistry?.getAll?.() ?? [];
+		const models = [...new Map(all.filter((model) => ["hms", "xingchiapi"].includes(model.provider))
+			.map((model) => [healthKey(model), model])).values()];
+		const keys = new Set(models.map(healthKey));
+		for (const key of health.keys()) if (!keys.has(key)) health.delete(key);
+		void probeModels(ctx, models);
 	}
 	async function checkModel(ctx: UsageCmdCtx) {
 		const model = safeModel(ctx);
 		if (!model || !["hms", "xingchiapi"].includes(model.provider)) {
-			ctx.ui.notify("Model checks support the active HMS or xingchiapi model only.", "warning");
-			return;
+			ctx.ui.notify("Model checks support the active HMS or xingchiapi model only.", "warning"); return;
 		}
-		if (checkAbort) { ctx.ui.notify("A model check is already running.", "info"); return; }
-		const generation = ++checkGeneration;
-		const controller = new AbortController();
-		checkAbort = controller;
-		const started = Date.now();
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const timeout = new Promise<never>((_resolve, reject) => {
-			timer = setTimeout(() => { controller.abort(); reject(new Error("Model check timed out")); }, 30_000);
-		});
-		let ok = false;
-		ctx.ui.notify("Checking the active model with a small inference request (may use credits).", "info");
-		try {
-			const result = await Promise.race([ctx.modelRegistry.streamSimple(model, {
-				messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
-			}, { maxTokens: 64, signal: controller.signal }).result(), timeout]);
-			ok = !controller.signal.aborted && ["stop", "length"].includes(result.stopReason) &&
-				result.content.some((part) => part.type === "text" && part.text.trim().length > 0);
-		} catch { /* Provider errors can contain secrets. Never render them here. */ }
-		finally {
-			clearTimeout(timer);
-			if (checkAbort === controller) checkAbort = undefined;
-		}
-		if (generation !== checkGeneration || safeModel(ctx) !== model) return;
-		healthModel = model;
-		healthText = `Model check: ${ok ? "OK" : "failed (no usable response)"} · ${Date.now() - started}ms · checked ${new Date().toISOString()}`;
-		if (mode !== "off") {
-			if (ctx.ui.setWidget) ctx.ui.setWidget("usage-model-health", [healthText], { placement: "belowEditor" });
-			else ctx.ui.setStatus("usage-model-health", healthText);
-		}
-		ctx.ui.notify(healthText, ok ? "info" : "warning");
+		if (checkAbort) { ctx.ui.notify("Automatic model checks are running; see the live status.", "info"); return; }
+		await probeModels(ctx, [model]);
+		ctx.ui.notify(healthLines().join("\n"), "info");
 	}
 	const onPoolAccountSelected = (event: unknown) => {
 		const id = asRecord(event)?.id;
@@ -2632,7 +2739,8 @@ export default function (pi: ExtensionAPI) {
 	/** Route to the right provider config for the active model. */
 	function route(ctx: StatusCtx, force: boolean) {
 		currentCtx = ctx;
-		if (force || mode === "off") clearHealth(ctx);
+		if (mode === "off") clearHealth(ctx);
+		else startHealth(ctx);
 		pi.events?.emit("codex-pool:request-account", {});
 		if (mode === "off") {
 			stopDiskCacheWatcher();
@@ -2709,6 +2817,7 @@ export default function (pi: ExtensionAPI) {
 			// Nothing usable cached (e.g. first reveal after hiding) — fetch now.
 			poke(cfg, ctx, true);
 		}
+		startHealth(ctx);
 		ctx.ui.notify(`Subscription usage style: ${next}`, "info");
 	}
 
@@ -2911,7 +3020,7 @@ export default function (pi: ExtensionAPI) {
 				return (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0);
 			});
 
-			const sections: string[] = healthText && healthModel === model ? [healthText] : [];
+			const sections: string[] = healthLines().length ? [healthLines().join("\n")] : [];
 			const emptyIds: string[] = [];
 			const now = Date.now();
 			for (const { cfg, data, fetchedAt, lastError } of ordered) {
@@ -2952,6 +3061,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 	pi.on("session_start", async (_event, ctx) => {
+		clearHealth(ctx);
 		route(ctx, true);
 	});
 

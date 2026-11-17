@@ -473,7 +473,7 @@ test("toggling usage off aborts active fetch via signal", async (t) => {
 	assert.equal(receivedSignal.aborted, true);
 });
 
-test("manual model check renders inference result and clears it on model switch", async (t) => {
+test("manual model check renders inference result across model switches", async (t) => {
 	const h = harness(t);
 	h.ctx.model = { provider: "hms", id: "test" } as typeof h.ctx.model;
 	let succeed = true;
@@ -487,14 +487,116 @@ test("manual model check renders inference result and clears it on model switch"
 	await h.event("session_start");
 	assert.equal(stream.mock.callCount(), 0);
 	await h.commands.get("usage")!.handler("check", h.ctx);
-	assert.match(h.statuses.get("usage-model-health")!, /Model check: OK/);
+	assert.match(h.statuses.get("usage-model-health")!, /HMS test ✓/);
 	await h.commands.get("usage")!.handler("", h.ctx);
-	assert.match(notify.mock.calls.at(-1)!.arguments[0], /Model check: OK/);
+	assert.match(notify.mock.calls.at(-1)!.arguments[0], /hms\/test: OK/);
 	succeed = false;
 	await h.commands.get("usage")!.handler("check", h.ctx);
-	assert.match(h.statuses.get("usage-model-health")!, /failed/);
+	assert.match(h.statuses.get("usage-model-health")!, /test !/);
 	await h.event("model_select");
+	assert.match(h.statuses.get("usage-model-health")!, /test !/);
+});
+
+test("automatic checks poll both providers without a command and survive model switches", async (t) => {
+	const h = harness(t);
+	const models = [{ provider: "hms", id: "one" }, { provider: "xingchiapi", id: "two" }];
+	const stream = t.mock.fn(() => ({ result: async () => ({ stopReason: "stop", content: [{ type: "text", text: "OK" }] }) }));
+	h.ctx.modelRegistry = { getAll: () => [...models, models[0], { provider: "other", id: "skip" }], streamSimple: stream } as unknown as typeof h.ctx.modelRegistry;
+	const notify = t.mock.method(h.ctx.ui, "notify");
+	await h.event("session_start");
+	assert.equal(stream.mock.callCount(), 2);
+	assert.match(h.statuses.get("usage-model-health")!, /HMS.*XINGCHI.*one ✓.*two ✓/);
+	assert.equal(notify.mock.callCount(), 0);
+	await h.event("model_select");
+	assert.equal(stream.mock.callCount(), 2);
+	t.mock.timers.tick(60_000);
+	await flush();
+	assert.equal(stream.mock.callCount(), 4);
+	await h.commands.get("usage")!.handler("", h.ctx);
+	assert.match(notify.mock.calls.at(-1)!.arguments[0], /xingchiapi\/two: OK/);
+	await h.commands.get("usage")!.handler("toggle off", h.ctx);
+	t.mock.timers.tick(120_000);
+	await flush();
+	assert.equal(stream.mock.callCount(), 4);
 	assert.equal(h.statuses.get("usage-model-health"), undefined);
+	await h.commands.get("usage")!.handler("toggle percent", h.ctx);
+	await flush();
+	assert.equal(stream.mock.callCount(), 6);
+});
+
+test("health widget stays compact, reflows and clears on hide", async (t) => {
+	const h = harness(t);
+	let widget: Component | undefined;
+	Object.assign(h.ctx.ui, { setWidget(key: string, factory: Parameters<ExtensionContext["ui"]["setWidget"]>[1]) {
+		if (key === "usage-model-health") widget = typeof factory === "function" ? factory({} as never, h.ctx.ui.theme) : undefined;
+	} });
+	h.ctx.modelRegistry = {
+		getAll: () => [{ provider: "hms", id: "deepseek-v4.1-flash-free" }, { provider: "xingchiapi", id: "gpt-6.1-sol" }],
+		streamSimple: () => ({ result: async () => ({ stopReason: "stop", content: [{ type: "text", text: "OK" }] }) }),
+	} as unknown as typeof h.ctx.modelRegistry;
+	await h.event("session_start");
+	assert.ok(widget);
+	assert.equal(widget.render(120).length, 2);
+	assert.doesNotMatch(widget.render(120).join(""), /may use credits|models|ago|Model checks/);
+	for (const width of [40, 10, 1]) assert.ok(widget.render(width).every((line) => visibleWidth(line) <= width));
+	h.ctx.ui.theme.fg = (_color: string, text: string) => `\x1b[32m${text}\x1b[0m`;
+	widget.invalidate();
+	assert.ok(widget.render(120).join("").includes("\x1b"));
+	await h.commands.get("usage")!.handler("toggle off", h.ctx);
+	assert.equal(widget, undefined);
+});
+
+test("automatic checks time out, do not overlap, and stop on shutdown", async (t) => {
+	const h = harness(t);
+	const signals: AbortSignal[] = [];
+	const stream = t.mock.fn((_m: unknown, _c: unknown, options: { signal: AbortSignal }) => {
+		signals.push(options.signal);
+		return { result: () => new Promise(() => {}) };
+	});
+	h.ctx.modelRegistry = { getAll: () => [{ provider: "hms", id: "one" }], streamSimple: stream } as unknown as typeof h.ctx.modelRegistry;
+	await h.event("session_start");
+	await h.commands.get("usage")!.handler("check", h.ctx);
+	assert.equal(stream.mock.callCount(), 1);
+	t.mock.timers.tick(30_000);
+	await flush();
+	assert.equal(signals[0].aborted, true);
+	assert.match(h.statuses.get("usage-model-health")!, /one !/);
+	t.mock.timers.tick(60_000);
+	await flush();
+	assert.equal(stream.mock.callCount(), 2);
+	await h.event("session_shutdown");
+	assert.equal(signals[1].aborted, true);
+	t.mock.timers.tick(120_000);
+	await flush();
+	assert.equal(stream.mock.callCount(), 2);
+	assert.equal(h.statuses.get("usage-model-health"), undefined);
+});
+
+test("off cancels queued models and an old sweep cannot overwrite a restored sweep", async (t) => {
+	const h = harness(t);
+	const finish: (() => void)[] = [];
+	const signals: AbortSignal[] = [];
+	const stream = t.mock.fn((_m: unknown, _c: unknown, options: { signal: AbortSignal }) => {
+		signals.push(options.signal);
+		return { result: () => new Promise((resolve) => { finish.push(() => resolve({ stopReason: "stop", content: [{ type: "text", text: "OK" }] })); }) };
+	});
+	h.ctx.modelRegistry = { getAll: () => ["one", "two", "three"].map((id) => ({ provider: "hms", id })), streamSimple: stream } as unknown as typeof h.ctx.modelRegistry;
+	await h.event("session_start");
+	assert.equal(stream.mock.callCount(), 2);
+	await h.commands.get("usage")!.handler("toggle off", h.ctx);
+	await flush();
+	assert.ok(signals.slice(0, 2).every((signal) => signal.aborted));
+	assert.equal(stream.mock.callCount(), 2);
+	await h.commands.get("usage")!.handler("toggle bars", h.ctx);
+	await flush();
+	assert.equal(stream.mock.callCount(), 4);
+	finish[0](); finish[1]();
+	await flush();
+	assert.equal(stream.mock.callCount(), 4);
+	assert.doesNotMatch(h.statuses.get("usage-model-health")!, /✓/);
+	await h.event("session_shutdown");
+	assert.ok(signals.every((signal) => signal.aborted));
+	assert.equal(stream.mock.callCount(), 4);
 });
 
 test("model checks reject unsupported providers and discard cancelled results", async (t) => {
