@@ -1025,6 +1025,7 @@ export function getDeepSeekPeakInfo(now = Date.now()): DeepSeekPeakInfo {
 
 /** True when the active provider/model bills on DeepSeek's peak-hour windows. */
 export function usesDeepSeekPeakPricing(providerId?: string, modelId?: string): boolean {
+	if (providerId === "hms") return false;
 	if (providerId === "deepseek") return true;
 	return Boolean(modelId && /deepseek/i.test(modelId));
 }
@@ -1347,6 +1348,127 @@ export const codexCfg: ProviderCfg = {
 
 		if (parts.length === 0) return "";
 		return joinParts(parts, theme);
+	},
+};
+
+/** HMS exposes account quota on the non-billable model-list response. */
+export const hmsCfg: ProviderCfg = {
+	id: "hms",
+	sharedCache: false,
+	async fetchUsage(signal) {
+		let keys: string[] = [];
+		let fd: number | undefined;
+		try {
+			fd = fs.openSync(path.join(getAgentDir(), "hms-pool.json"), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot open private HMS pool");
+		}
+		if (fd !== undefined) {
+			try {
+				const stat = fs.fstatSync(fd);
+				if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 ||
+					(process.getuid && stat.uid !== process.getuid())) throw new Error();
+				const config = JSON.parse(fs.readFileSync(fd, "utf8"));
+				if (config.baseUrl !== "https://100milionseek.top/v1" || !Array.isArray(config.keys) ||
+					!config.keys.length || config.keys.some((key: unknown) => typeof key !== "string" || !key.trim())) throw new Error();
+				keys = [...new Set<string>(config.keys)];
+			} catch { throw new Error("Invalid private HMS pool (requires owner-only 0600 file)"); }
+			finally { fs.closeSync(fd); }
+		} else {
+			const cred = readStoredCredential("hms");
+			const key = (cred?.type === "api_key" ? cred.key : undefined) || process.env.HMS_API_KEY?.trim();
+			if (!key) throw new MissingCredentialError("no API key (HMS_API_KEY or auth.json)");
+			keys = [key];
+		}
+		const quotas = await Promise.all(keys.map(async (key, index) => {
+			let res: Response;
+			try {
+				res = await fetch("https://100milionseek.top/v1/models", {
+					headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+					redirect: "error",
+					signal: anySignal(signal, AbortSignal.timeout(10_000)),
+				});
+			} catch { throw new Error(`HMS key ${index + 1}: quota unavailable; pool total unknown`); }
+			await res.body?.cancel();
+			if (!res.ok) throw new Error(`HMS key ${index + 1}: HTTP ${res.status}; pool total unknown`);
+			const limit = Number(res.headers.get("x-quota-limit") ?? NaN);
+			const used = Number(res.headers.get("x-quota-used") ?? NaN);
+			const remaining = Number(res.headers.get("x-quota-remaining") ?? Math.max(0, limit - used));
+			const reset = Date.parse(res.headers.get("x-quota-reset") ?? "");
+			if (!Number.isSafeInteger(limit) || limit <= 0 || !Number.isSafeInteger(used) || used < 0 ||
+				!Number.isSafeInteger(remaining) || remaining < 0 || remaining > limit || !Number.isFinite(reset)) {
+				throw new Error("HMS returned invalid quota headers; pool total unknown");
+			}
+			return { limit, remaining, reset };
+		}));
+		const limit = quotas.reduce((sum, quota) => sum + quota.limit, 0);
+		const remaining = quotas.reduce((sum, quota) => sum + quota.remaining, 0);
+		return {
+			windows: { daily: (limit - remaining) / limit * 100 },
+			resets: { daily: Math.min(...quotas.map((quota) => quota.reset)) },
+			plan: `${remaining.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens left · ${keys.length} key${keys.length === 1 ? "" : "s"} (UTC day)`,
+		};
+	},
+	render(data, theme, modelId, style) {
+		return joinParts([codexCfg.render(data, theme, modelId, style), theme.fg("dim", data.plan ?? "HMS")].filter(Boolean), theme);
+	},
+};
+
+export const xingchiapiCfg: ProviderCfg = {
+	id: "xingchiapi",
+	sharedCache: false,
+	async fetchUsage(signal, ctx) {
+		const registry = ctx?.modelRegistry;
+		const model = ctx?.model?.provider === "xingchiapi"
+			? ctx.model
+			: registry?.getAll().find((candidate) => candidate.provider === "xingchiapi");
+		if (!registry || !model) throw new MissingCredentialError("no configured model for xingchiapi");
+		const auth = await registry.getApiKeyAndHeaders(model);
+		if (!auth.ok) throw new Error("Unable to resolve credentials for xingchiapi; check provider configuration");
+		const baseUrl = auth.baseUrl ?? model.baseUrl;
+		const url = new URL(baseUrl);
+		if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+			throw new Error("xingchiapi requires an HTTP(S) base URL without credentials, query, or fragment");
+		}
+		const basePath = url.pathname.replace(/\/+$/, "");
+		if (!basePath.endsWith("/v1")) throw new Error("xingchiapi base URL must end in /v1");
+		url.pathname = `${basePath}/usage`;
+		const headers = new Headers({ Accept: "application/json" });
+		if (auth.apiKey) headers.set("Authorization", `Bearer ${auth.apiKey}`);
+		for (const [name, value] of Object.entries(auth.headers ?? {})) {
+			if (value === null) headers.delete(name);
+			else headers.set(name, value);
+		}
+		if (!headers.has("Authorization")) throw new MissingCredentialError("no API key for xingchiapi");
+		const res = await fetch(url, {
+			headers,
+			redirect: "error",
+			signal: anySignal(signal, AbortSignal.timeout(10_000)),
+		});
+		if (!res.ok) throw await usageHttpError(res, "xingchiapi", [auth.apiKey ?? "", headers.get("Authorization")?.replace(/^Bearer\s+/i, "") ?? "", ...headers.values()]);
+		const json = asRecord(await res.json());
+		if (!json || json.isValid === false) throw new Error("xingchiapi reported an invalid API key");
+		const remaining = finiteNumber(json.remaining ?? json.balance);
+		if (remaining === undefined) throw new Error("xingchiapi returned no numeric balance");
+		if (typeof json.unit !== "string" || !/^[A-Z]{3}$/.test(json.unit)) throw new Error("xingchiapi returned an invalid currency");
+		const unit = json.unit;
+		const today = asRecord(asRecord(json.usage)?.today);
+		const details = [
+			"xingchiapi",
+			json.mode === "unrestricted" ? "unrestricted" : undefined,
+			Number.isSafeInteger(today?.requests) && Number(today?.requests) >= 0 ? `${today?.requests} requests today` : undefined,
+		].filter((value): value is string => Boolean(value));
+		return {
+			windows: {},
+			balance: { currency: unit, total: remaining },
+			...(details.length > 0 ? { plan: details.join(" · ") } : {}),
+		};
+	},
+	render(data, theme) {
+		return joinParts([
+			theme.fg("dim", data.plan ?? "xingchiapi"),
+			data.balance ? formatBalance(data.balance) : undefined,
+		].filter((value): value is string => Boolean(value)), theme);
 	},
 };
 
@@ -1961,6 +2083,8 @@ export const usageProviderCfgs: readonly ProviderCfg[] = [
 	antigravityCfg,
 	claudeCliCfg,
 	deepseekCfg,
+	hmsCfg,
+	xingchiapiCfg,
 ];
 
 /** Unambiguous short names accepted as `/usage refresh <target>` aliases. */
@@ -1975,6 +2099,7 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 	claude: "claude-cli",
 	"claude-cli": "claude-cli",
 	deepseek: "deepseek",
+	xingchiapi: "xingchiapi",
 };
 
 /**
@@ -2045,6 +2170,57 @@ export default function (pi: ExtensionAPI) {
 	const cache = new Map<string, ProviderState>();
 	let currentCtx: StatusCtx | undefined;
 	let selectedPoolAccount: string | undefined;
+	let checkAbort: AbortController | undefined;
+	let checkGeneration = 0;
+	let healthText: string | undefined;
+	let healthModel: StatusCtx["model"];
+	function clearHealth(ctx: StatusCtx) {
+		checkGeneration++;
+		checkAbort?.abort();
+		checkAbort = undefined;
+		if (!healthText && !healthModel) return;
+		healthText = undefined;
+		healthModel = undefined;
+		ctx.ui.setWidget?.("usage-model-health", undefined, { placement: "belowEditor" });
+		ctx.ui.setStatus("usage-model-health", undefined);
+	}
+	async function checkModel(ctx: UsageCmdCtx) {
+		const model = safeModel(ctx);
+		if (!model || !["hms", "xingchiapi"].includes(model.provider)) {
+			ctx.ui.notify("Model checks support the active HMS or xingchiapi model only.", "warning");
+			return;
+		}
+		if (checkAbort) { ctx.ui.notify("A model check is already running.", "info"); return; }
+		const generation = ++checkGeneration;
+		const controller = new AbortController();
+		checkAbort = controller;
+		const started = Date.now();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => { controller.abort(); reject(new Error("Model check timed out")); }, 30_000);
+		});
+		let ok = false;
+		ctx.ui.notify("Checking the active model with a small inference request (may use credits).", "info");
+		try {
+			const result = await Promise.race([ctx.modelRegistry.streamSimple(model, {
+				messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
+			}, { maxTokens: 64, signal: controller.signal }).result(), timeout]);
+			ok = !controller.signal.aborted && ["stop", "length"].includes(result.stopReason) &&
+				result.content.some((part) => part.type === "text" && part.text.trim().length > 0);
+		} catch { /* Provider errors can contain secrets. Never render them here. */ }
+		finally {
+			clearTimeout(timer);
+			if (checkAbort === controller) checkAbort = undefined;
+		}
+		if (generation !== checkGeneration || safeModel(ctx) !== model) return;
+		healthModel = model;
+		healthText = `Model check: ${ok ? "OK" : "failed (no usable response)"} · ${Date.now() - started}ms · checked ${new Date().toISOString()}`;
+		if (mode !== "off") {
+			if (ctx.ui.setWidget) ctx.ui.setWidget("usage-model-health", [healthText], { placement: "belowEditor" });
+			else ctx.ui.setStatus("usage-model-health", healthText);
+		}
+		ctx.ui.notify(healthText, ok ? "info" : "warning");
+	}
 	const onPoolAccountSelected = (event: unknown) => {
 		const id = asRecord(event)?.id;
 		if (typeof id !== "string") return;
@@ -2456,6 +2632,7 @@ export default function (pi: ExtensionAPI) {
 	/** Route to the right provider config for the active model. */
 	function route(ctx: StatusCtx, force: boolean) {
 		currentCtx = ctx;
+		if (force || mode === "off") clearHealth(ctx);
 		pi.events?.emit("codex-pool:request-account", {});
 		if (mode === "off") {
 			stopDiskCacheWatcher();
@@ -2509,6 +2686,7 @@ export default function (pi: ExtensionAPI) {
 		await savePrefs({ ...prefs, mode });
 
 		if (next === "off") {
+			clearHealth(ctx);
 			stopDiskCacheWatcher();
 			// Hide: drop statuses and stop every timer/fetch for this session.
 			for (const c of cfgs) clear(ctx, c.id);
@@ -2601,6 +2779,7 @@ export default function (pi: ExtensionAPI) {
 				const subcommands = [
 					{ value: "toggle", label: "toggle", description: "Cycle usage style: bars → percent → off" },
 					{ value: "refresh", label: "refresh", description: "Force-refresh the active provider (or name one/all)" },
+					{ value: "check", label: "check", description: "Test active HMS/xingchiapi inference (may use credits)" },
 					{ value: "help", label: "help", description: "Show usage help" },
 				];
 				const filtered = subcommands.filter((sub) =>
@@ -2656,11 +2835,16 @@ export default function (pi: ExtensionAPI) {
 				case "refresh":
 					await handleUsageRefresh(rest, ctx);
 					return;
+				case "check":
+					if (rest) { ctx.ui.notify("Usage: /usage check (active model only)", "warning"); return; }
+					await checkModel(ctx);
+					return;
 				case "help":
 					ctx.ui.notify(
 						[
 							"Subscription usage commands:",
 							"• /usage — detailed usage for all providers",
+							"• /usage check — test active HMS/xingchiapi inference (may use credits)",
 							"• /usage toggle [bars|percent|off] — cycle or set usage style",
 							"• /usage refresh [active|<provider>|all] — force-refresh usage (default: active)",
 						].join("\n"),
@@ -2727,7 +2911,7 @@ export default function (pi: ExtensionAPI) {
 				return (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0);
 			});
 
-			const sections: string[] = [];
+			const sections: string[] = healthText && healthModel === model ? [healthText] : [];
 			const emptyIds: string[] = [];
 			const now = Date.now();
 			for (const { cfg, data, fetchedAt, lastError } of ordered) {
@@ -2782,6 +2966,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		clearHealth(ctx);
 		stopDiskCacheWatcher();
 		if (cacheSyncTimer) {
 			clearTimeout(cacheSyncTimer);

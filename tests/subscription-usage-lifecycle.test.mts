@@ -10,6 +10,8 @@ import subscriptionUsage, {
 	codexCfg,
 	codexPoolCfg,
 	deepseekCfg,
+	hmsCfg,
+	xingchiapiCfg,
 	MissingCredentialError,
 	opencodeCfg,
 	usageProviderCfgs,
@@ -47,6 +49,8 @@ function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = [])
 		antigravity: t.mock.method(antigravityCfg, "fetchUsage", async () => ({ windows: { "gemini-5h": 8 } })),
 		"claude-cli": t.mock.method(claudeCliCfg, "fetchUsage", async () => ({ windows: { "5h": 10 } })),
 		deepseek: t.mock.method(deepseekCfg, "fetchUsage", async () => ({ windows: { "deepseek-5h": 3 } })),
+		hms: t.mock.method(hmsCfg, "fetchUsage", async () => ({ windows: { daily: 25 } })),
+		xingchiapi: t.mock.method(xingchiapiCfg, "fetchUsage", async () => ({ windows: {}, balance: { currency: "USD", total: 42 } })),
 	};
 	const events = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
 	const commands = new Map<string, { handler(args: string, ctx: ExtensionCommandContext): Promise<void> }>();
@@ -328,7 +332,7 @@ test("/usage refresh all force-fetches every provider explicitly", async (t) => 
 		if (id === "openai-codex") continue;
 		assert.equal(mocked.mock.callCount(), 1, id);
 	}
-	assert.match(notices.at(-1)!, /Usage refreshed for all 7 providers/);
+	assert.match(notices.at(-1)!, new RegExp(`Usage refreshed for all ${usageProviderCfgs.length} providers`));
 });
 
 test("/usage refresh <provider> refreshes only that provider", async (t) => {
@@ -467,6 +471,49 @@ test("toggling usage off aborts active fetch via signal", async (t) => {
 	await h.commands.get("usage")!.handler("toggle off", h.ctx);
 	await flush();
 	assert.equal(receivedSignal.aborted, true);
+});
+
+test("manual model check renders inference result and clears it on model switch", async (t) => {
+	const h = harness(t);
+	h.ctx.model = { provider: "hms", id: "test" } as typeof h.ctx.model;
+	let succeed = true;
+	const stream = t.mock.fn((_model: unknown, context: unknown, options: { maxTokens: number }) => {
+		assert.equal(options.maxTokens, 64);
+		assert.deepEqual((context as { messages: { content: string }[] }).messages.map((m) => m.content), ["Reply OK."]);
+		return { result: async () => ({ stopReason: succeed ? "stop" : "error", content: [{ type: "text", text: "OK" }] }) };
+	});
+	h.ctx.modelRegistry = { streamSimple: stream } as unknown as typeof h.ctx.modelRegistry;
+	const notify = t.mock.method(h.ctx.ui, "notify");
+	await h.event("session_start");
+	assert.equal(stream.mock.callCount(), 0);
+	await h.commands.get("usage")!.handler("check", h.ctx);
+	assert.match(h.statuses.get("usage-model-health")!, /Model check: OK/);
+	await h.commands.get("usage")!.handler("", h.ctx);
+	assert.match(notify.mock.calls.at(-1)!.arguments[0], /Model check: OK/);
+	succeed = false;
+	await h.commands.get("usage")!.handler("check", h.ctx);
+	assert.match(h.statuses.get("usage-model-health")!, /failed/);
+	await h.event("model_select");
+	assert.equal(h.statuses.get("usage-model-health"), undefined);
+});
+
+test("model checks reject unsupported providers and discard cancelled results", async (t) => {
+	const h = harness(t);
+	await h.commands.get("usage")!.handler("check", h.ctx);
+	assert.equal(h.statuses.get("usage-model-health"), undefined);
+	h.ctx.model = { provider: "xingchiapi", id: "test" } as typeof h.ctx.model;
+	let finish!: () => void;
+	let signal!: AbortSignal;
+	h.ctx.modelRegistry = { streamSimple: (_m: unknown, _c: unknown, options: { signal: AbortSignal }) => {
+		signal = options.signal;
+		return { result: () => new Promise((resolve) => { finish = () => resolve({ stopReason: "stop", content: [{ type: "text", text: "OK" }] }); }) };
+	} } as unknown as typeof h.ctx.modelRegistry;
+	const pending = h.commands.get("usage")!.handler("check", h.ctx);
+	await h.event("session_shutdown");
+	assert.equal(signal.aborted, true);
+	finish();
+	await pending;
+	assert.equal(h.statuses.get("usage-model-health"), undefined);
 });
 
 test("concurrent model selections coalesce in-flight fetch without duplicate HTTP requests", async (t) => {
