@@ -156,6 +156,13 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus, comm
 	];
 
 	const goalFocusItems = [
+		"Choose the smallest check that settles the user's goal. Use the applicable guidance below to write concrete success criteria or milestones for execution after confirmation. For a simple edit, one observable check is enough.",
+		"Bug fix: plan to reproduce the reported symptom, establish its cause, and repeat the original action after the fix. If reproduction is unavailable, report the verification gap.",
+		"Performance: name the user-visible metric and workload. Capture a baseline, use measurements to choose a change, then compare under the same conditions.",
+		"Prototype: name the decision the experiment should settle. Try the smallest isolated example that distinguishes the options and report the observed trade-offs.",
+		"New project or feature: choose one usable end-to-end interaction and verify it through the intended entry point.",
+		"Config or prompt evaluation: hold the task and starting conditions constant, define success before comparing outputs, and evaluate quality alongside time when speed matters.",
+		"Read-only investigation: trace the relevant behavior and cite evidence. Keep changes, delegation, and delivery steps within the requested scope.",
 		"For /goal, propose a normal goal in this shape when ready:",
 		"=== Goal ===",
 		"Objective: <one-sentence outcome>",
