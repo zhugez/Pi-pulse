@@ -200,6 +200,9 @@ importers:
       '@earendil-works/pi-tui':
         specifier: ^1.5.0
         version: 1.5.0
+      '@types/bun':
+        specifier: 1.4.4
+        version: 1.4.4
       '@types/cross-spawn':
         specifier: ^6.0.6
         version: 6.0.6
@@ -733,6 +736,9 @@ packages:
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
+  '@types/bun@1.4.4':
+    resolution: {integrity: sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ==}
+
   '@types/cross-spawn@6.0.6':
     resolution: {integrity: sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA==}
 
@@ -893,6 +899,9 @@ packages:
 
   buffer-equal-constant-time@1.0.1:
     resolution: {integrity: sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==}
+
+  bun-types@1.4.4:
+    resolution: {integrity: sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ==}
 
   chalk@6.0.0:
     resolution: {integrity: sha512-2uNTXIuTTxk7ciZgAU1BQcgnchcG0xXnrs6jzkQfj9SsRa9M2s5zE8WT96hS6KmG4MzWHSrvH43DF1m4XRkrFg==}
@@ -1763,6 +1772,10 @@ snapshots:
 
   '@stablelib/base64@1.0.1': {}
 
+  '@types/bun@1.4.4':
+    dependencies:
+      bun-types: 1.4.4
+
   '@types/cross-spawn@6.0.6':
     dependencies:
       '@types/node': 26.6.5
@@ -1852,6 +1865,11 @@ snapshots:
       balanced-match: 4.0.4
 
   buffer-equal-constant-time@1.0.1: {}
+
+  bun-types@1.4.4:
+    dependencies:
+      '@types/node': 26.6.5
+      undici-types: 8.9.0
 
   chalk@6.0.0: {}
 

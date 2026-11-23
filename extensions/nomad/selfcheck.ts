@@ -61,7 +61,8 @@ await assert.rejects(direct.rotate(), /Rotation disabled/);
 assert.throws(() => createEgress({ OCI_EGRESS: "invalid" }));
 assert.throws(() => createEgress({ OCI_EGRESS: "TOR", OCI_TOR_PORT: "NaN" }));
 assert.throws(() => createEgress({ OCI_MAX_ATTEMPTS: "0" }));
-const limited = new Response('{"error":"FreeUsageLimitError"}', { status: 429 });
+const freeLimit = () => new Response('{"error":"FreeUsageLimitError"}', { status: 429 });
+const limited = freeLimit();
 assert.equal(await direct.send(async () => limited), limited);
 
 const commands: string[][] = [];
@@ -83,12 +84,12 @@ const tor = createEgress({ OCI_EGRESS: "TOR", OCI_MAX_ATTEMPTS: "2", OCI_TOR_CON
   async (port, password) => { assert.equal(port, 19051); assert.equal(password, "secret"); signals++; });
 assert.equal(tor.proxy, "socks5://127.0.0.1:9050");
 let attempts = 0;
-const success = await tor.send(async () => ++attempts === 1 ? limited.clone() : new Response("ok"));
+const success = await tor.send(async () => ++attempts === 1 ? freeLimit() : new Response("ok"));
 assert.equal(await success.text(), "ok");
 assert.equal(attempts, 2);
 assert.equal(signals, 1);
 attempts = 0;
-await tor.send(async () => { attempts++; return limited.clone(); });
+await tor.send(async () => { attempts++; return freeLimit(); });
 assert.equal(attempts, 2);
 const beforeSignals = signals;
 for (const response of [new Response("ModelDeprecated", { status: 429 }), new Response("FreeUsageLimitError", { status: 500 })]) {

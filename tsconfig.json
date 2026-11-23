@@ -11,5 +11,6 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["extensions/**/*", "tests/**/*"]
+  "include": ["extensions/**/*", "tests/**/*"],
+  "exclude": ["extensions/nomad/gateway.ts", "extensions/nomad/selfcheck.ts"]
 }

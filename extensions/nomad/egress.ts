@@ -49,7 +49,7 @@ export function createEgress(
   let lastIp = "";
   let pending: Promise<string> | undefined;
   let dispatcher = proxy ? new ProxyAgent(proxy) : undefined;
-  async function routedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  async function routedFetch(url: string, init: RequestInit & { headers?: Headers } = {}): Promise<Response> {
     if (!dispatcher) return fetch(url, init);
     const response = await proxyFetch(url, { ...init, body: init.body as string | undefined, dispatcher });
     return new Response(response.body as ReadableStream<Uint8Array> | null, {
