@@ -28,7 +28,7 @@ if report=$(
     | {process: (.Process | checked("object") | objects | owned) // null,
        ancestry: [.Ancestry | checked("array") | .[]? | identity],
        source: (.Source | checked("object") | objects | {Type: (.Type | checked("string")), Name: (.Name | checked("string"))}) // null,
-       matches: [.Matches | checked("array") | .[]? | owned]}' 2>/dev/null
+       matches: [.Matches | checked("array") | .[]? | identity]}' 2>/dev/null
   status=("${PIPESTATUS[@]}")
   if (( status[1] != 0 )); then
     printf 'Cannot produce a safe witr report (witr exit: %s).\n' "${status[0]}" >&2
@@ -45,10 +45,10 @@ fi
 The ancestry chain can include the selected process. A report without a selected process has `process: null`. Interpret the witr status separately from a filter failure:
 
 - `0` or `1`: Found. The second status indicates warnings, not failure.
-- `2`: No match visible in this environment. For WSL, check which side owns the listener before concluding the port is free.
+- `2`: No match visible in this environment. This does not prove that a port is free.
 - `3`: Permission denied. Ask before using elevated privileges.
-- `4`: Invalid or ambiguous target. Correct the argument or choose a confirmed PID from the candidates.
+- `4`: Invalid or ambiguous target. Correct an invalid argument. For an ambiguous target, report the candidate PIDs and commands. Run the same Bash block with `--pid` for each chosen candidate. Report `process.User` for the process found at lookup time. If the lookup cannot identify the owner, report it as unknown.
 - `5`: Internal error. Report the failure.
 - `6`: Found, but the source could not be traced. Report what you know.
 
-Report the owner, PID, and supervisor when known. Do not stop, signal, restart, or reconfigure anything without user approval.
+Report the PID, user, and supervisor of the process witr selected, when known. A port lookup alone does not prove that the selected process holds the socket. Do not stop, signal, restart, or reconfigure anything without user approval.

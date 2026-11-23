@@ -23,7 +23,7 @@ The collection currently includes two observability extensions, integrated model
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 - **Stella** — `/skill:stella` rewrites ambiguous technical English using ASD-STE100-inspired rules, with a bundled linter for structural checks.
-- **witr** — `/skill:witr` identifies the owner of a local process or occupied port and traces what started the process. Requires Bash, `jq`, and the [witr CLI](https://github.com/pranshuparmar/witr#2-installation) on `PATH`.
+- **witr** — `/skill:witr` looks up local processes and occupied ports. It reports the user of the process witr selects and traces what started that process. Requires Bash, `jq`, and the [witr CLI](https://github.com/pranshuparmar/witr#2-installation) on `PATH`.
 - **Goal** — `/goal` conversational goal planning with tasks, subtasks, persistent progress, and an independent completion auditor.
 - **Todo** — a persistent `todo` tool, `/todos`, and a live task panel above the editor.
 - **Advisor** — an on-demand second opinion through `ask_advisor` and configurable review gates, on a separate model.
