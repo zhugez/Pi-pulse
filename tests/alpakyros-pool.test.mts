@@ -10,8 +10,9 @@ const message = (): AssistantMessage => ({ role: "assistant", content: [], api: 
   usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
 
-for (const status of [429, 401, 403, 500]) {
-  test(`pool bounds failover for HTTP ${status} and sticks to successful key`, async () => {
+for (const status of [429, 401, 403, 500, 400]) {
+  const shouldFailOver = status !== 400;
+  test(`pool ${shouldFailOver ? "fails over and sticks to the successful key" : "does not fail over"} for HTTP ${status}`, async () => {
     const tried: string[] = [];
     const delegate = ((_model: unknown, _ctx: unknown, options: any) => {
       const stream = createAssistantMessageEventStream();
@@ -28,11 +29,11 @@ for (const status of [429, 401, 403, 500]) {
     const pool = createPoolStream([{ key: "a" }, { key: "b" }], delegate);
     const options = { fetch: async () => new Response(null, { status: tried.at(-1) === "a" ? status : 200 }) };
     const first = await pool(model, context, options).result();
-    assert.deepEqual(tried, status === 500 ? ["a"] : ["a", "b"]);
-    assert.equal(first.stopReason, status === 500 ? "error" : "stop");
-    if (status !== 500) {
+    assert.deepEqual(tried, shouldFailOver ? ["a", "b"] : ["a"]);
+    assert.equal(first.stopReason, shouldFailOver ? "stop" : "error");
+    if (shouldFailOver) {
       await pool(model, context, options).result();
-      assert.equal(tried.at(-1), "b");
+      assert.deepEqual(tried, ["a", "b", "b"]);
     }
   });
 }
