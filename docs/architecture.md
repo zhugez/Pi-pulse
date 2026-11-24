@@ -49,5 +49,5 @@ not a locking mechanism.
 Run `npm run check` for type checking and all tests. Cache tests exercise the
 module's read/write interface using temporary directories, including overlapping
 updates, external updates, malformed files, recovery after write failure, and
-replacement fallback. Existing provider and lifecycle tests exercise the
-extension's unchanged interface and behavior.
+replacement fallback. Provider and lifecycle tests exercise the extension's
+public interface.

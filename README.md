@@ -17,7 +17,7 @@ The collection currently includes two observability extensions, integrated model
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
-- **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
+- **[Antigravity Pool](#antigravity-pool)** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Claude Code CLI provider** — use your Claude Pro/Max subscription from Pi coding agent via the local authenticated `claude` CLI with MCP tool bridge.
 - **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
@@ -130,7 +130,7 @@ After adding accounts, select any `codex-pool` model in `/model` (e.g., `codex-p
 Supported providers:
 
 - OpenAI Codex: 5-hour and weekly quota windows, plus banked resets
-- Antigravity Pro: Gemini and third-party model quota windows
+- Antigravity Pool: Gemini and third-party model quota windows
 - OpenCode Go: rolling, weekly, and monthly limits
 - DeepSeek API: account balance and local peak/off-peak timing
 - codex-lb custom providers: effective API-key/pool limits from `/v1/usage`
@@ -139,7 +139,7 @@ Supported providers:
 
 Usage appears in its own responsive strip below the editor, separate from the throughput footer. Wide terminals retain progress bars; narrow terminals switch to percentages and wrap without dropping quota windows or reset countdowns. Resizing back restores your selected style automatically.
 
-The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. Built-in providers share a disk cache; custom codex-lb quotas stay session-local so identical provider names on different hosts/accounts cannot share quota data.
+The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. OpenAI Codex uses a shared disk cache. Antigravity Pool and custom codex-lb quotas stay session-local so separate profiles, hosts, or accounts do not share cached quota data.
 
 HMS and xingchiapi models also receive automatic inference checks in every Pi session, regardless of the active provider. The extension checks each configured chat model with an isolated `Reply OK.` request, with at most two concurrent checks and a 30-second timeout per model. It starts the next sweep 60 seconds after the previous sweep completes. These requests can consume tokens and credits. A compact two-column HMS/XINGCHI toolbar shows short model labels, status symbols, and successful response times below the editor. Full model IDs, result age, and polling details remain in `/usage`. An `OK` means the model returned non-empty text during that check, not guaranteed future availability. A failed check means no usable response arrived within the check's limits.
 
@@ -154,7 +154,7 @@ Commands:
 /usage refresh [active|<provider>|all]
 ```
 
-`/usage refresh` defaults to the **active provider**, not unrelated saved accounts. Use `/usage refresh all` explicitly to check every configured usage provider. API failures include the server's reason and credential/permission guidance; missing credentials are reported separately.
+`/usage refresh` defaults to the **active provider**, not unrelated saved accounts. Use `/usage refresh antigravity-pool` to check Antigravity Pool directly. Use `/usage refresh all` explicitly to check every configured usage provider. API failures include the server's reason and credential/permission guidance; missing credentials are reported separately.
 
 #### codex-lb setup
 
@@ -336,16 +336,16 @@ Performance changes go through the benchmark gate, which compares median **and**
 
 ## Security and privacy
 
-Pi extensions execute with the same operating-system permissions as Pi. The usage extension reads built-in provider credentials from environment variables or `~/.pi/agent/auth.json`. Opted-in codex-lb providers use Pi's resolved model credentials and headers. Requests go only to the corresponding quota/balance endpoints; codex-lb requests reject redirects. Review the source before installation.
+Pi extensions execute with the same operating-system permissions as Pi. The usage extension can use environment variables or local credential files. For Antigravity Pool, it reads local credentials from `auth.json` and `antigravity-accounts.json` in the active Pi profile. Opted-in codex-lb providers use Pi's resolved model credentials and headers. Requests go only to the corresponding quota/balance endpoints; codex-lb requests reject redirects. Review the source before installation.
 
-Runtime state is stored under `~/.pi/agent/`:
+The default location for runtime state is `~/.pi/agent/`:
 
 - `codex-accounts.json` (pooled OpenAI Codex OAuth credentials, mode 0600)
 - `subscription-usage-cache.json`
 - `subscription-usage-prefs.json`
 - `live-throughput-prefs.json`
-- `auth.json` (Antigravity and Codex Pool OAuth marker credentials managed by Pi)
-- `antigravity-accounts.json` (linked Antigravity accounts)
+- `auth.json` (Antigravity Pool OAuth login and Codex Pool OAuth marker managed by Pi)
+- `antigravity-accounts.json` (linked accounts)
 - `gemini-web/credentials.json` (stored Gemini Web cookie credentials, mode 0600 in 0700 dir)
 
 The `codex-accounts.json`, `auth.json`, `antigravity-accounts.json`, and `gemini-web/credentials.json` files contain sensitive credentials. Never commit, share, or paste their contents into issues.

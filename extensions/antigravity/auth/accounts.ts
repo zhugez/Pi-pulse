@@ -239,8 +239,15 @@ export function migrateLegacyAntigravityAuth(): "migrated" | "collision" | "abse
     if (!Object.hasOwn(auth, LEGACY_PROVIDER_ID)) return "absent";
     if (Object.hasOwn(auth, PROVIDER_ID)) return "collision";
     const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
-    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
-        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return "invalid";
+    if (
+      legacy?.type !== 'oauth' ||
+      typeof legacy.refresh !== 'string' ||
+      !legacy.refresh.trim() ||
+      typeof legacy.access !== 'string' ||
+      typeof legacy.expires !== 'number' ||
+      !Number.isFinite(legacy.expires)
+    )
+      return 'invalid';
     auth[PROVIDER_ID] = legacy;
     delete auth[LEGACY_PROVIDER_ID];
     writePrivateJson([target, auth]);
@@ -345,8 +352,12 @@ function commitRefreshedAccount(
   let result: StoredAccount | undefined;
   updateAccounts((store) => {
     const current = store.accounts[previous.accountId];
-    if (!current || current.addedAt !== previous.addedAt ||
-        !isDeepStrictEqual(credentialFields(current), credentialFields(previous))) return;
+    if (
+      !current ||
+      current.addedAt !== previous.addedAt ||
+      !isDeepStrictEqual(credentialFields(current), credentialFields(previous))
+    )
+      return;
     const fields = credentialFields(refreshed);
     result = { ...current, ...fields, lastUsedAt: used ? Date.now() : current.lastUsedAt };
     if (!used && isDeepStrictEqual(fields, credentialFields(current))) return false;
@@ -369,12 +380,31 @@ async function changeAccountSelection(selector: string, action: "switch" | "remo
     const removingActive = store.activeAccountId === accountId;
     const changesAuth = action === "switch" || removingActive || canonicalId === accountId;
     const selectsAccount = action === "switch" || removingActive;
-    const next = action === "switch" ? store.accounts[accountId] : removingActive
-      ? sortedAccounts(store).filter((a) => a.accountId !== accountId).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]
-      : changesAuth && store.activeAccountId ? store.accounts[store.activeAccountId] : undefined;
+    const next =
+      action === 'switch'
+        ? store.accounts[accountId]
+        : removingActive
+          ? sortedAccounts(store)
+              .filter((a) => a.accountId !== accountId)
+              .sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]
+          : changesAuth && store.activeAccountId
+            ? store.accounts[store.activeAccountId]
+            : undefined;
     const ids = new Set([accountId, next?.accountId]);
-    const credentials = [...ids].map((id) => id && linked[id] ? [linked[id].addedAt, credentialFields(linked[id])] : undefined);
-    const version = [target, canonical, activeAccountId, rotate, accountId, canonicalId, changesAuth, next?.accountId, credentials];
+    const credentials = [...ids].map((id) =>
+      id && linked[id] ? [linked[id].addedAt, credentialFields(linked[id])] : undefined,
+    );
+    const version = [
+      target,
+      canonical,
+      activeAccountId,
+      rotate,
+      accountId,
+      canonicalId,
+      changesAuth,
+      next?.accountId,
+      credentials,
+    ];
     return { accountId, next, selectsAccount, changesAuth, version };
   }
 
