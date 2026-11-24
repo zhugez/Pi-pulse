@@ -1736,6 +1736,7 @@ async function refreshAntigravityToken(
 /** Antigravity (Google Cloud Code Assist): 5h & weekly pools for Gemini and Claude/GPT models. */
 export const antigravityCfg: ProviderCfg = {
 	id: ANTIGRAVITY_POOL_ID,
+	sharedCache: false,
 	async fetchUsage(signal?: AbortSignal) {
 		let refreshToken: string | undefined;
 		const endpoints = antigravityEndpointCandidates();

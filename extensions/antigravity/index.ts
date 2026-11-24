@@ -141,11 +141,6 @@ function registerCompatApiProvider(): void {
 }
 
 export default function (pi: ExtensionAPI): void {
-  try {
-    migrateLegacyAntigravityAuth();
-  } catch {
-    throw new Error("Antigravity Pool could not migrate auth.json. Close other Pi processes and restart Pi.");
-  }
   registerCompatApiProvider();
 
   try {
@@ -209,6 +204,29 @@ export default function (pi: ExtensionAPI): void {
       }
     }
   }
+
+  pi.registerCommand("antigravity.migrate", {
+    description: "Move a legacy Antigravity OAuth login to Antigravity Pool once",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        emitCommandOutput(ctx, "Usage: /antigravity.migrate", "warning");
+        return;
+      }
+      try {
+        const result = migrateLegacyAntigravityAuth();
+        const messages = {
+          migrated: `Moved the legacy OAuth login to ${PROVIDER_ID}. Restart Pi and select the model under ${PROVIDER_ID}.`,
+          collision: `Both Antigravity credential entries exist. Neither entry changed.`,
+          absent: "No legacy Antigravity credential to migrate.",
+          invalid: "The legacy Antigravity credential is not a valid OAuth login. It did not change.",
+        };
+        emitCommandOutput(ctx, messages[result], result === "collision" || result === "invalid" ? "warning" : "info");
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        emitCommandOutput(ctx, `Antigravity migration failed: ${redactSecrets(msg)}`, "error");
+      }
+    },
+  });
 
   pi.registerCommand("antigravity.usage", {
     description: "Show Antigravity shared quota pools (Gemini / Claude+GPT, 5h + weekly)",

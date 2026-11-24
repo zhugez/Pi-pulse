@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { lockSync } from "proper-lockfile";
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -55,25 +56,32 @@ function authPath(): string {
   return join(getAgentDir(), AUTH_FILE);
 }
 
-function readJsonObject(path: string): Record<string, unknown> | undefined {
-  if (!existsSync(path)) return undefined;
+function readJsonObject(path: string, allowEmpty = false): Record<string, unknown> | undefined {
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return undefined;
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
+  if (allowEmpty && raw === "") return {};
+  const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+  return parsed as Record<string, unknown>;
 }
 
-function writePrivateJson(path: string, value: unknown): void {
-  const tempDir = mkdtempSync(join(dirname(path), ".antigravity-"));
+function writePrivateJson(...files: [path: string, value: unknown][]): void {
+  const staged: { dir: string; temp: string; path: string }[] = [];
   try {
-    const tempFile = join(tempDir, "state.json");
-    writeFileSync(tempFile, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    renameSync(tempFile, path);
+    for (const [path, value] of files) {
+      const dir = mkdtempSync(join(dirname(path), ".antigravity-"));
+      const temp = join(dir, "state.json");
+      staged.push({ dir, temp, path });
+      writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    }
+    for (const { temp, path } of staged) renameSync(temp, path);
   } finally {
-    rmSync(tempDir, { recursive: true, force: true });
+    for (const { dir } of staged) rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -114,11 +122,15 @@ function normalizeStore(value: Record<string, unknown> | undefined): AccountsFil
 }
 
 export function loadAccountStore(): AccountsFile {
-  return normalizeStore(readJsonObject(accountsPath()));
+  try {
+    return normalizeStore(readJsonObject(accountsPath()));
+  } catch {
+    return emptyStore();
+  }
 }
 
 function saveAccountStore(store: AccountsFile): void {
-  writePrivateJson(accountsPath(), store);
+  writePrivateJson([accountsPath(), store]);
 }
 
 function accountIdFor(credentials: OAuthCredentials): string {
@@ -188,45 +200,46 @@ function findAccountId(store: AccountsFile, selector: string): string | undefine
   )?.accountId;
 }
 
-function lockAuthFile(path: string) {
-  const target = realpathSync(path);
-  const unlock = lockSync(target, { stale: 30_000, update: 15_000 });
-  return { target, unlock };
-}
-
-function readLockedAuth(target: string): Record<string, unknown> {
-  const auth = readJsonObject(target);
-  if (!auth) throw new Error("Refusing to overwrite unreadable Pi auth.json");
-  return auth;
-}
-
-export function migrateLegacyAntigravityAuth(): void {
-  const path = authPath();
-  if (!existsSync(path)) return;
-  const { target, unlock } = lockAuthFile(path);
+function withLockedAuth<T>(path: string, use: (auth: Record<string, unknown>, target: string) => T): T {
+  let target: string;
   try {
-    const auth = readLockedAuth(target);
-    const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
-    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
-        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return;
-    const collisionMarker = `${target}.antigravity-pool-collision`;
-    if (existsSync(collisionMarker)) return;
-    if (Object.hasOwn(auth, PROVIDER_ID)) {
-      writeFileSync(collisionMarker, "", { flag: "wx", mode: 0o600 });
-      return;
+    target = realpathSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || lstatSync(path, { throwIfNoEntry: false })) throw error;
+    target = join(realpathSync(dirname(path)), basename(path));
+  }
+  const unlock = lockSync(target, { realpath: false, stale: 30_000, update: 15_000 });
+  try {
+    let auth: Record<string, unknown>;
+    try {
+      auth = readJsonObject(target, true) ?? {};
+    } catch {
+      throw new Error("Refusing to overwrite unreadable Pi auth.json");
     }
-    auth[PROVIDER_ID] = legacy;
-    delete auth[LEGACY_PROVIDER_ID];
-    writePrivateJson(target, auth);
+    return use(auth, target);
   } finally {
     unlock();
   }
 }
 
-function importCurrentAuth(store: AccountsFile, current: unknown): boolean {
-  if (!current || typeof current !== "object") return false;
+export function migrateLegacyAntigravityAuth(): "migrated" | "collision" | "absent" | "invalid" {
+  return withLockedAuth(authPath(), (auth, target) => {
+    if (!Object.hasOwn(auth, LEGACY_PROVIDER_ID)) return "absent";
+    if (Object.hasOwn(auth, PROVIDER_ID)) return "collision";
+    const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
+    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
+        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return "invalid";
+    auth[PROVIDER_ID] = legacy;
+    delete auth[LEGACY_PROVIDER_ID];
+    writePrivateJson([target, auth]);
+    return "migrated";
+  });
+}
+
+function importCurrentAuth(store: AccountsFile, current: unknown): string | undefined {
+  if (!current || typeof current !== "object") return undefined;
   const record = current as Record<string, unknown>;
-  if (typeof record.refresh !== "string" || !record.refresh) return false;
+  if (typeof record.refresh !== "string" || !record.refresh) return undefined;
   const credentials = {
     access: typeof record.access === "string" ? record.access : "",
     refresh: record.refresh,
@@ -240,11 +253,16 @@ function importCurrentAuth(store: AccountsFile, current: unknown): boolean {
   if (!store.activeAccountId || !store.accounts[store.activeAccountId]) {
     store.activeAccountId = account.accountId;
   }
-  return true;
+  return account.accountId;
 }
 
 export function syncCurrentAuth(): void {
-  const current = readJsonObject(authPath())?.[PROVIDER_ID];
+  let current: unknown;
+  try {
+    current = readJsonObject(authPath(), true)?.[PROVIDER_ID];
+  } catch {
+    return;
+  }
   if (!current) return;
   const store = loadAccountStore();
   if (importCurrentAuth(store, current)) saveAccountStore(store);
@@ -307,62 +325,63 @@ function apiKeyFor(account: StoredAccount): AntigravityApiKey {
   };
 }
 
-async function changeAccountSelection<T>(
-  selector: string,
-  change: (store: AccountsFile, accountId: string) => Promise<{ result: T; credential?: StoredAccount | null }>,
-): Promise<T> {
-  const path = authPath();
-  try {
-    writeFileSync(path, "{}", { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const { target, unlock } = lockAuthFile(path);
-  try {
-    const auth = readLockedAuth(target);
-    const store = loadAccountStore();
-    importCurrentAuth(store, auth[PROVIDER_ID]);
-    const accountId = findAccountId(store, selector);
-    if (!accountId) throw new Error(`Antigravity account not found: ${selector}`);
-    const { result, credential } = await change(store, accountId);
-    if (credential) {
-      const { email, access, refresh, expires, projectId } = credential;
-      auth[PROVIDER_ID] = { type: "oauth", email, access, refresh, expires, projectId };
-    } else if (credential === null) {
-      delete auth[PROVIDER_ID];
-    }
-    if (credential !== undefined) writePrivateJson(target, auth);
-    saveAccountStore(store);
-    return result;
-  } finally {
-    unlock();
-  }
+function credentialFields({ email, access, refresh, expires, projectId }: StoredAccount) {
+  return { email, access, refresh, expires, projectId };
 }
 
-export function activateAccount(selector: string): Promise<StoredAccount> {
-  return changeAccountSelection(selector, async (store, accountId) => {
-    const account = await ensureFresh(store.accounts[accountId]);
-    account.lastUsedAt = Date.now();
-    store.accounts[accountId] = account;
-    store.activeAccountId = accountId;
-    store.rotate = false;
-    return { result: account, credential: account };
+async function changeAccountSelection(selector: string, action: "switch" | "remove") {
+  const authFile = authPath();
+  const linkedFile = accountsPath();
+  function readSelection(auth: Record<string, unknown>, target: string) {
+    const store = normalizeStore(readJsonObject(linkedFile));
+    const { activeAccountId, rotate } = store;
+    const linked = { ...store.accounts };
+    const canonical = auth[PROVIDER_ID];
+    const canonicalId = importCurrentAuth(store, canonical);
+    const accountId = findAccountId(store, selector);
+    if (!accountId) return undefined;
+    const removingActive = store.activeAccountId === accountId;
+    const changesAuth = action === "switch" || removingActive || canonicalId === accountId;
+    const next = action === "switch" ? store.accounts[accountId] : removingActive
+      ? sortedAccounts(store).filter((a) => a.accountId !== accountId).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]
+      : changesAuth && store.activeAccountId ? store.accounts[store.activeAccountId] : undefined;
+    const ids = new Set([accountId, next?.accountId]);
+    const credentials = [...ids].map((id) => id && linked[id] ? credentialFields(linked[id]) : undefined);
+    const version = [target, canonical, activeAccountId, rotate, accountId, canonicalId, changesAuth, next?.accountId, credentials];
+    return { store, accountId, next, changesAuth, version };
+  }
+
+  const before = withLockedAuth(authFile, readSelection);
+  if (!before) throw new Error(`Antigravity account not found: ${selector}`);
+  const fresh = before.next && await ensureFresh(before.next);
+  return withLockedAuth(authFile, (auth, target) => {
+    const current = readSelection(auth, target);
+    if (!current || !isDeepStrictEqual(current.version, before.version)) {
+      throw new Error("Antigravity account selection changed. Retry the command.");
+    }
+    const { store, accountId, next, changesAuth } = current;
+    if (action === "remove") delete store.accounts[accountId];
+    else store.rotate = false;
+    const account = fresh && next ? { ...next, ...credentialFields(fresh), lastUsedAt: Date.now() } : undefined;
+    if (account) store.accounts[account.accountId] = account;
+    if (!changesAuth) {
+      writePrivateJson([linkedFile, store]);
+      return undefined;
+    }
+    store.activeAccountId = account?.accountId;
+    if (account) auth[PROVIDER_ID] = { type: "oauth", ...credentialFields(account) };
+    else delete auth[PROVIDER_ID];
+    writePrivateJson([target, auth], [linkedFile, store]);
+    return account;
   });
+}
+
+export async function activateAccount(selector: string): Promise<StoredAccount> {
+  return (await changeAccountSelection(selector, "switch"))!;
 }
 
 export function removeAccount(selector: string): Promise<StoredAccount | undefined> {
-  return changeAccountSelection(selector, async (store, accountId) => {
-    delete store.accounts[accountId];
-    if (store.activeAccountId !== accountId) return { result: undefined };
-    let next = sortedAccounts(store).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0];
-    if (next) {
-      next = await ensureFresh(next);
-      next.lastUsedAt = Date.now();
-      store.accounts[next.accountId] = next;
-    }
-    store.activeAccountId = next?.accountId;
-    return { result: next, credential: next ?? null };
-  });
+  return changeAccountSelection(selector, "remove");
 }
 
 function findAccountByTokenOrId(

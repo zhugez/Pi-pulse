@@ -199,7 +199,9 @@ Antigravity Pool is built into `pi-pulse`. For a new installation, sign in and s
 /model antigravity-pool/gemini-3.8-flash
 ```
 
-On upgrade, Pi moves an existing OAuth entry from `antigravity` to `antigravity-pool` in `auth.json`. If both entries exist, Pi leaves both unchanged. Keep the `auth.json.antigravity-pool-collision` marker beside `auth.json` so a later logout does not restore the old credential. Linked accounts stay intact. Close older Pi processes before upgrading. In an old session, select the model again under the new provider ID. Update saved `antigravity/...` model patterns and overrides to use `antigravity-pool/...`.
+Startup does not migrate credentials. To keep a legacy OAuth login, close older Pi processes. In the profile you want to upgrade, run `/antigravity.migrate` once. The command moves the `antigravity` entry to `antigravity-pool` in the private `auth.json`. If both entries exist, the command reports the conflict and leaves both unchanged. Linked accounts stay intact. Do not run the command after logout unless you intend to restore the retained legacy login.
+
+After migration, restart Pi and select a model under `antigravity-pool`. Update saved `antigravity/...` model patterns and overrides to use `antigravity-pool/...`.
 
 To roll back, close Pi and restore the old extension. If the private `auth.json` has no `antigravity` entry, rename `antigravity-pool` to `antigravity`. Do not overwrite an existing `antigravity` entry.
 

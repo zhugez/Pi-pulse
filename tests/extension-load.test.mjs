@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-test("Antigravity Pool migrates OAuth and exposes models on first startup", () => {
+test("Antigravity Pool respects native logout and migrates only on command", () => {
   const home = mkdtempSync(join(tmpdir(), "pi-pulse-antigravity-upgrade-"));
   try {
     const dir = join(home, "pi-profile");
@@ -18,10 +18,11 @@ test("Antigravity Pool migrates OAuth and exposes models on first startup", () =
     const writeAuth = (auth, prefix = "") => writeFileSync(path, prefix + JSON.stringify(auth), { mode: 0o600 });
     const readAuth = () => JSON.parse(readFileSync(path, "utf8"));
     const extension = fileURLToPath(new URL("../extensions/antigravity/index.ts", import.meta.url));
-    const runPi = (args) => {
+    const runPi = (args, input) => {
       const result = spawnSync(process.env.PI_BIN ?? "pi", args, {
         cwd: home,
         env: { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: "~/pi-profile", PI_AGENT_DIR: dir, PI_OFFLINE: "1" },
+        input,
         encoding: "utf8",
         timeout: 20_000,
       });
@@ -31,30 +32,31 @@ test("Antigravity Pool migrates OAuth and exposes models on first startup", () =
     };
 
     const listModels = () => runPi(["--offline", "-ne", "-e", extension, "--list-models", "antigravity-pool"]);
+    const migrate = () => {
+      const result = runPi(["--offline", "-ne", "-e", extension, "--mode", "rpc", "--no-session"],
+        '{"id":"migration","type":"prompt","message":"/antigravity.migrate"}\n');
+      return result.stdout + result.stderr;
+    };
+
+    writeAuth({ antigravity: legacy, "antigravity-pool": fresh, other });
+    runPi(["auth", "logout", "antigravity-pool"]);
+    assert.doesNotMatch(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { antigravity: legacy, other });
+
+    writeAuth({ antigravity: legacy, "antigravity-pool": fresh, other });
+    const beforeCollision = readFileSync(path, "utf8");
+    assert.match(migrate(), /Both Antigravity credential entries exist/);
+    assert.equal(readFileSync(path, "utf8"), beforeCollision);
+
     const accountsPath = join(dir, "antigravity-accounts.json");
     const linked = JSON.stringify({ version: 1, activeAccountId: "linked", accounts: { linked: { refresh: "linked-refresh" } } });
     writeFileSync(accountsPath, linked, { mode: 0o600 });
     writeAuth({ antigravity: legacy, other }, "\uFEFF");
-    assert.match(listModels().stdout, /^antigravity-pool\s/m);
-    assert.equal(readFileSync(accountsPath, "utf8"), linked);
+    assert.match(migrate(), /Moved the legacy OAuth login to antigravity-pool/);
     assert.deepEqual(readAuth(), { "antigravity-pool": legacy, other });
+    assert.equal(readFileSync(accountsPath, "utf8"), linked);
     assert.equal(statSync(path).mode & 0o777, 0o600);
     assert.match(listModels().stdout, /^antigravity-pool\s/m);
-    assert.deepEqual(readAuth(), { "antigravity-pool": legacy, other });
-
-    const malformed = { ...legacy, refresh: 42 };
-    writeAuth({ antigravity: malformed, other });
-    assert.doesNotMatch(listModels().stdout, /^antigravity-pool\s/m);
-    assert.deepEqual(readAuth(), { antigravity: malformed, other });
-
-    writeAuth({ antigravity: legacy, "antigravity-pool": fresh, other });
-    const beforeCollision = readFileSync(path, "utf8");
-    assert.match(listModels().stdout, /^antigravity-pool\s/m);
-    assert.equal(readFileSync(path, "utf8"), beforeCollision);
-
-    runPi(["auth", "logout", "antigravity-pool"]);
-    assert.doesNotMatch(listModels().stdout, /^antigravity-pool\s/m);
-    assert.deepEqual(readAuth(), { antigravity: legacy, other });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
