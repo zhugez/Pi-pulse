@@ -91,7 +91,7 @@ export function jsonOrTextError(text: string): string {
 
 export function parseApiKey(apiKeyRaw: string | undefined): AntigravityApiKey {
   if (!apiKeyRaw) {
-    throw new Error("No Antigravity OAuth credentials. Run /login antigravity.");
+    throw new Error("No Antigravity OAuth credentials. Run /login antigravity-pool.");
   }
   try {
     const parsed = JSON.parse(apiKeyRaw) as Partial<AntigravityApiKey>;
@@ -99,7 +99,7 @@ export function parseApiKey(apiKeyRaw: string | undefined): AntigravityApiKey {
     return { token: parsed.token, projectId: parsed.projectId };
   } catch (error) {
     throw new Error(
-      `Invalid Antigravity credentials. Run /login antigravity. (${safeError(error)})`,
+      `Invalid Antigravity credentials. Run /login antigravity-pool. (${safeError(error)})`,
       { cause: error },
     );
   }

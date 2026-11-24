@@ -165,7 +165,7 @@ function startCallbackServer(expectedState: string): Promise<CallbackServer> {
       if (err.code === "EADDRINUSE") {
         reject(
           new Error(
-            "Port 51121 is already in use by another process. Please close the process using port 51121 and retry /login antigravity.",
+            "Port 51121 is already in use by another process. Please close the process using port 51121 and retry /login antigravity-pool.",
           ),
         );
       } else {
@@ -237,7 +237,7 @@ function parsePastedCallback(raw: string, expectedState: string): { code: string
   }
   if (state !== expectedState) {
     throw new Error(
-      "State mismatch: that callback is from a different sign-in. Re-run /login antigravity, sign in again, and paste the new URL.",
+      "State mismatch: that callback is from a different sign-in. Re-run /login antigravity-pool, sign in again, and paste the new URL.",
     );
   }
   return { code, state };
@@ -382,7 +382,7 @@ export async function loginAntigravity(
     };
     if (!tokenData.refresh_token) {
       throw new Error(
-        "No refresh token received. Re-run /login antigravity and allow offline access.",
+        "No refresh token received. Re-run /login antigravity-pool and allow offline access.",
       );
     }
 

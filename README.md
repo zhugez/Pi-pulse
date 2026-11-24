@@ -190,14 +190,18 @@ Commands:
 /throughput help
 ```
 
-### Antigravity provider
+### Antigravity Pool
 
-The Antigravity provider is built directly into `pi-pulse`. After installing or updating `pi-pulse`, authenticate and select a model:
+Antigravity Pool is built into `pi-pulse`. For a new installation, sign in and select a model:
 
 ```text
-/login antigravity
-/model antigravity/gemini-3.8-flash
+/login antigravity-pool
+/model antigravity-pool/gemini-3.8-flash
 ```
+
+On upgrade, Pi moves an existing OAuth entry from `antigravity` to `antigravity-pool` in `auth.json`. If both entries exist, it preserves the older one under `antigravity-legacy` without using it for login. Linked accounts stay intact. Close older Pi processes before upgrading. In an old session, select the model again under the new provider ID. Update saved `antigravity/...` model patterns and overrides to use `antigravity-pool/...`.
+
+To roll back, close Pi and restore the old extension. In the private `auth.json`, rename `antigravity-legacy` (or `antigravity-pool` if there is no archive) to `antigravity`. Do not overwrite an existing `antigravity` entry.
 
 Useful commands:
 

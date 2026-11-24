@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { lockSync } from "proper-lockfile";
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { defaultProjectId } from "../client/client.js";
+import { LEGACY_PROVIDER_ID, PROVIDER_ID } from "../models/models.js";
 import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
 import { refreshAntigravityToken } from "./oauth.js";
 
 const ACCOUNTS_FILE = "antigravity-accounts.json";
 const AUTH_FILE = "auth.json";
+const ARCHIVED_AUTH_ID = "antigravity-legacy";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 export type StoredAccount = AntigravityOAuthCredentials & {
@@ -69,11 +72,14 @@ function readJsonObject(path: string): Record<string, unknown> | undefined {
 }
 
 function writePrivateJson(path: string, value: unknown): void {
-  const tempPath = `${path}.${process.pid}.tmp`;
-  writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  chmodSync(tempPath, 0o600);
-  renameSync(tempPath, path);
-  chmodSync(path, 0o600);
+  const tempDir = mkdtempSync(join(dirname(path), ".antigravity-"));
+  try {
+    const tempFile = join(tempDir, "state.json");
+    writeFileSync(tempFile, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    renameSync(tempFile, path);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function emptyStore(): AccountsFile {
@@ -187,35 +193,58 @@ function findAccountId(store: AccountsFile, selector: string): string | undefine
   )?.accountId;
 }
 
-function readAuthFile(): Record<string, unknown> {
+function updateAuthFile(update: (auth: Record<string, unknown>) => boolean): void {
   const path = authPath();
-  if (!existsSync(path)) return {};
-  const parsed = readJsonObject(path);
-  if (!parsed) {
-    throw new Error("Refusing to overwrite unreadable Pi auth.json");
+  try {
+    writeFileSync(path, "{}", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  return parsed;
+  const target = realpathSync(path);
+  const unlock = lockSync(target);
+  try {
+    const auth = readJsonObject(target);
+    if (!auth) throw new Error("Refusing to overwrite unreadable Pi auth.json");
+    if (update(auth)) writePrivateJson(target, auth);
+  } finally {
+    unlock();
+  }
+}
+
+export function migrateLegacyAntigravityAuth(): void {
+  if (!readJsonObject(authPath())?.[LEGACY_PROVIDER_ID]) return;
+  updateAuthFile((auth) => {
+    const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
+    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
+        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return false;
+    const target = Object.hasOwn(auth, PROVIDER_ID) ? ARCHIVED_AUTH_ID : PROVIDER_ID;
+    if (Object.hasOwn(auth, target)) throw new Error("Antigravity legacy credential archive already exists.");
+    auth[target] = legacy;
+    delete auth[LEGACY_PROVIDER_ID];
+    return true;
+  });
 }
 
 function writeActiveCredential(account: StoredAccount | undefined): void {
-  const auth = readAuthFile();
-  if (account) {
-    auth.antigravity = {
-      type: "oauth",
-      email: account.email,
-      access: account.access,
-      refresh: account.refresh,
-      expires: account.expires,
-      projectId: account.projectId,
-    };
-  } else {
-    delete auth.antigravity;
-  }
-  writePrivateJson(authPath(), auth);
+  updateAuthFile((auth) => {
+    if (account) {
+      auth[PROVIDER_ID] = {
+        type: "oauth",
+        email: account.email,
+        access: account.access,
+        refresh: account.refresh,
+        expires: account.expires,
+        projectId: account.projectId,
+      };
+    } else {
+      delete auth[PROVIDER_ID];
+    }
+    return true;
+  });
 }
 
 function currentAuthCredentials(): AntigravityOAuthCredentials | undefined {
-  const current = readJsonObject(authPath())?.antigravity;
+  const current = readJsonObject(authPath())?.[PROVIDER_ID];
   if (!current || typeof current !== "object") return undefined;
   const record = current as Record<string, unknown>;
   if (typeof record.refresh !== "string" || !record.refresh) return undefined;

@@ -1,9 +1,56 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+test("Antigravity Pool migrates OAuth and exposes models on first startup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-pulse-antigravity-upgrade-"));
+  try {
+    const path = join(dir, "auth.json");
+    const legacy = { type: "oauth", access: "old-access", refresh: "old-refresh", expires: Date.now() + 3600_000 };
+    const fresh = { ...legacy, access: "new-access" };
+    const other = { type: "api_key", key: "unrelated-key" };
+    const writeAuth = (auth) => writeFileSync(path, JSON.stringify(auth), { mode: 0o600 });
+    const readAuth = () => JSON.parse(readFileSync(path, "utf8"));
+    const extension = fileURLToPath(new URL("../extensions/antigravity/index.ts", import.meta.url));
+    const listModels = () => {
+      const result = spawnSync(process.env.PI_BIN ?? "pi", ["--offline", "-ne", "-e", extension, "--list-models", "antigravity-pool"], {
+        cwd: dir,
+        env: { ...process.env, PI_CODING_AGENT_DIR: dir, PI_AGENT_DIR: dir, PI_OFFLINE: "1" },
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      return result;
+    };
+
+    writeAuth({ antigravity: legacy, other });
+    assert.match(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { "antigravity-pool": legacy, other });
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.match(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { "antigravity-pool": legacy, other });
+
+    writeAuth({ antigravity: legacy, "antigravity-pool": fresh, other });
+    assert.match(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { "antigravity-legacy": legacy, "antigravity-pool": fresh, other });
+
+    writeAuth({ "antigravity-legacy": legacy, other });
+    assert.doesNotMatch(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { "antigravity-legacy": legacy, other });
+
+    const malformed = { ...legacy, refresh: 42 };
+    writeAuth({ antigravity: malformed, other });
+    assert.doesNotMatch(listModels().stdout, /^antigravity-pool\s/m);
+    assert.deepEqual(readAuth(), { antigravity: malformed, other });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("Alpakyros Pool loads without local SDK dependencies", () => {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-pulse-alpakyros-"));
