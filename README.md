@@ -15,6 +15,7 @@ The collection currently includes two observability extensions, integrated model
 - **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
 - **Code Mode (`code_exec`)** — programmatically orchestrate file reads, shell commands, and data processing in an async sandbox without context bloat.
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
+- **[Numes Pool](#numes-pool)** — rotate local Numes API keys, skip keys rejected with HTTP 401, and respect shared rate limits.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
 - **[Antigravity Pool](#antigravity-pool)** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
@@ -124,6 +125,30 @@ Commands:
 ```
 
 After adding accounts, select any `codex-pool` model in `/model` (e.g., `codex-pool/gpt-5.3-codex`).
+
+### Numes Pool
+
+Numes Pool uses keys you already own. It does not create or revoke keys. Set it up on Linux or macOS:
+
+1. In your active Pi agent directory (default `~/.pi/agent`), create `numes-pool.keys` with `umask 077` and an editor. Put one Numes key on each line. The file must belong to you and have mode `0600`. Keep it outside Git.
+2. Add this entry under `providers` in the same directory's `models.json`. Keep the other providers. Replace `YOUR_NUMES_MODEL_ID` with an ID from your Numes model catalog. `numes-pool-managed` is a marker, not a key.
+
+   ```json
+   {
+     "providers": {
+       "numes-pool": {
+         "baseUrl": "https://api.numes.ai/api/v1",
+         "api": "openai-completions",
+         "apiKey": "numes-pool-managed",
+         "models": [{ "id": "YOUR_NUMES_MODEL_ID" }]
+       }
+     }
+   }
+   ```
+
+3. Reload Pi and select the Numes model with `/model`. Reload again after editing the key file.
+
+The pool rotates keys per request. An HTTP 401 marks that key as rejected until reload and tries the next key. An HTTP 429 pauses the whole pool in the current Pi process. The pool honors `Retry-After` and waits 60 seconds if the header is absent or invalid. An HTTP 403 does not trigger failover.
 
 ### Subscription usage
 

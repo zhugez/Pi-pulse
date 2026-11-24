@@ -53,6 +53,7 @@
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",
       "./extensions/alpakyros-pool/index.ts",
+      "./extensions/numes-pool/index.ts",
       "./extensions/workbuddy-pool/index.ts",
       "./extensions/antigravity/index.ts",
       "./extensions/gemini-web/index.ts",
