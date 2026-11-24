@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { execExom, resolveVaultRoot } from "../extensions/exomind/index.js";
 import registerExoMind from "../extensions/exomind/index.js";
@@ -9,10 +12,25 @@ test("exomind: resolveVaultRoot resolves Yasna-Memory or environment path", () =
   assert.match(root, /Yasna-Memory/);
 });
 
-test("exomind: execExom runs binary and gets version/help", async () => {
-  const result = await execExom(["--version"]);
-  assert.equal(result.exitCode, 0);
-  assert.match(result.stdout, /exom/);
+test('exomind: execExom runs exom from PATH and reports a missing binary', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'pi-exomind-'));
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  process.env.PATH = dir;
+
+  const missing = await execExom(['--version']);
+  assert.equal(missing.exitCode, 1);
+  assert.match(missing.stderr, /ENOENT/);
+  writeFileSync(
+    join(dir, 'exom'),
+    '#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = --version ] || exit 64\nprintf "exom fixture\\n"\n',
+    { mode: 0o755 },
+  );
+  assert.deepEqual(await execExom(['--version']), { exitCode: 0, stdout: 'exom fixture\n', stderr: '' });
 });
 
 test("exomind: registers tools and commands with Pi ExtensionAPI", () => {

@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { parseLine } from "../extensions/claude-cli/src/stream-parser.js";
 import { cliThinkingLevelMap } from "../extensions/claude-cli/src/thinking-config.js";
 import { validateCliPresence } from "../extensions/claude-cli/src/process-manager.js";
 import { CUSTOM_TOOLS_MCP_PREFIX } from "../extensions/claude-cli/src/tool-mapping.js";
 
-test("claude-cli: validateCliPresence detects installed claude binary", () => {
-  // Claude is installed on the machine
+test('claude-cli: validateCliPresence checks claude on PATH', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'pi-claude-cli-'));
+  const originalPath = process.env.PATH;
+  t.after(() => {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+  });
+  process.env.PATH = dir;
+
+  assert.throws(() => validateCliPresence(), /Claude Code CLI not found/);
+  writeFileSync(join(dir, 'claude'), '#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = --version ]\n', { mode: 0o755 });
   assert.doesNotThrow(() => validateCliPresence());
 });
 
