@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   ANTIGRAVITY_IMAGE_API,
   ANTIGRAVITY_IMAGE_MODELS,
@@ -12,7 +12,6 @@ import {
 import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import {
   activateAccount,
-  agentDir,
   isAccountRotationEnabled,
   listAccounts,
   migrateLegacyAntigravityAuth,
@@ -29,7 +28,6 @@ import { executeAntigravitySearch, parseSearchCommandArgs } from "./search/searc
 import {
   applyAntigravityCatalog,
   getCurrentAntigravityCatalog,
-  LEGACY_PROVIDER_ID,
   PROVIDER_ID,
   PROVIDER_NAME,
 } from "./models/models.js";
@@ -146,15 +144,15 @@ export default function (pi: ExtensionAPI): void {
   try {
     migrateLegacyAntigravityAuth();
   } catch {
-    throw new Error("Antigravity Pool could not migrate auth.json. Close other Pi processes and restart Pi. If the error persists, check for an existing antigravity-legacy entry.");
+    throw new Error("Antigravity Pool could not migrate auth.json. Close other Pi processes and restart Pi.");
   }
   registerCompatApiProvider();
 
   try {
-    const storePath = join(agentDir(), "models-store.json");
+    const storePath = join(getAgentDir(), "models-store.json");
     if (existsSync(storePath)) {
       const store = JSON.parse(readFileSync(storePath, "utf8"));
-      hydrateAntigravityCatalog(store[PROVIDER_ID] ?? store[LEGACY_PROVIDER_ID]);
+      hydrateAntigravityCatalog(store[PROVIDER_ID]);
     }
   } catch {}
 

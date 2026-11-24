@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
 	bar,
@@ -351,6 +354,52 @@ test("antigravity endpoint candidates use the canonical daily service first", ()
 	);
 });
 
+test("Antigravity quota uses the selected profile and names the canonical login", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "ag-quota-profile-"));
+	const env = {
+		PI_CODING_AGENT_DIR: dir,
+		ANTIGRAVITY_BASE_URL: "https://quota.example.test",
+		ANTIGRAVITY_TOKEN: "",
+		ANTIGRAVITY_API_KEY: "",
+	};
+	const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
+	Object.assign(process.env, env);
+	t.after(() => {
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	writeFileSync(join(dir, "auth.json"), `\uFEFF${JSON.stringify({
+		"antigravity-pool": { type: "oauth", access: "profile-token" },
+	})}`);
+	let status = 403;
+	const tokens: string[] = [];
+	t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+		const token = new Headers(init.headers).get("Authorization")!;
+		assert.ok(url.startsWith(env.ANTIGRAVITY_BASE_URL));
+		if (url.endsWith(":loadCodeAssist")) return Response.json({});
+		tokens.push(token);
+		if (status !== 200) return new Response("denied", { status });
+		return Response.json({ groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.5 }] }] });
+	});
+	for (status of [403, 401]) {
+		await assert.rejects(antigravityCfg.fetchUsage(), /use \/login for antigravity-pool\b/);
+	}
+	assert.deepEqual(tokens.splice(0), ["Bearer profile-token", "Bearer profile-token"]);
+
+	writeFileSync(join(dir, "antigravity-accounts.json"), JSON.stringify({
+		activeAccountId: "one",
+		accounts: { one: { access: "linked-one" }, two: { access: "linked-two" } },
+	}));
+	status = 200;
+	const usage = await antigravityCfg.fetchUsage();
+	assert.deepEqual(tokens.sort(), ["Bearer linked-one", "Bearer linked-two"]);
+	assert.equal(usage.accounts?.find((account) => account.active)?.id, "one");
+});
+
 test("detailBar renders theme-free cells and clamps", () => {
 	assert.equal(detailBar(0), "░░░░░░");
 	assert.equal(detailBar(50), "███░░░");
@@ -679,7 +728,7 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 	assert.deepEqual(resolveRefreshTargets("zen", usageProviderCfgs)?.map((c) => c.id), [
 		"opencode-go",
 	]);
-	for (const alias of ["google", "antigravity", "antigravity-pool"]) {
+	for (const alias of ["google", "antigravity-pool"]) {
 		assert.deepEqual(resolveRefreshTargets(alias, usageProviderCfgs)?.map((c) => c.id), ["antigravity-pool"]);
 	}
 	assert.deepEqual(resolveRefreshTargets("claude", usageProviderCfgs)?.map((c) => c.id), [
@@ -691,6 +740,7 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 });
 
 test("resolveRefreshTargets returns undefined for unresolvable targets", () => {
+	assert.equal(resolveRefreshTargets("antigravity", usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("bogus", usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("active", usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("active", usageProviderCfgs, "ollama"), undefined);

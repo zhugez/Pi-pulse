@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { lockSync } from "proper-lockfile";
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { defaultProjectId } from "../client/client.js";
 import { LEGACY_PROVIDER_ID, PROVIDER_ID } from "../models/models.js";
 import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
@@ -11,7 +11,6 @@ import { refreshAntigravityToken } from "./oauth.js";
 
 const ACCOUNTS_FILE = "antigravity-accounts.json";
 const AUTH_FILE = "auth.json";
-const ARCHIVED_AUTH_ID = "antigravity-legacy";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 export type StoredAccount = AntigravityOAuthCredentials & {
@@ -48,22 +47,18 @@ export function normalizeModelFamily(modelId: string): string {
   );
 }
 
-export function agentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-}
-
 function accountsPath(): string {
-  return join(agentDir(), ACCOUNTS_FILE);
+  return join(getAgentDir(), ACCOUNTS_FILE);
 }
 
 function authPath(): string {
-  return join(agentDir(), AUTH_FILE);
+  return join(getAgentDir(), AUTH_FILE);
 }
 
 function readJsonObject(path: string): Record<string, unknown> | undefined {
   if (!existsSync(path)) return undefined;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
     return parsed as Record<string, unknown>;
   } catch {
@@ -193,81 +188,66 @@ function findAccountId(store: AccountsFile, selector: string): string | undefine
   )?.accountId;
 }
 
-function updateAuthFile(update: (auth: Record<string, unknown>) => boolean): void {
-  const path = authPath();
-  try {
-    writeFileSync(path, "{}", { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
+function lockAuthFile(path: string) {
   const target = realpathSync(path);
-  const unlock = lockSync(target);
+  const unlock = lockSync(target, { stale: 30_000, update: 15_000 });
+  return { target, unlock };
+}
+
+function readLockedAuth(target: string): Record<string, unknown> {
+  const auth = readJsonObject(target);
+  if (!auth) throw new Error("Refusing to overwrite unreadable Pi auth.json");
+  return auth;
+}
+
+export function migrateLegacyAntigravityAuth(): void {
+  const path = authPath();
+  if (!existsSync(path)) return;
+  const { target, unlock } = lockAuthFile(path);
   try {
-    const auth = readJsonObject(target);
-    if (!auth) throw new Error("Refusing to overwrite unreadable Pi auth.json");
-    if (update(auth)) writePrivateJson(target, auth);
+    const auth = readLockedAuth(target);
+    const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
+    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
+        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return;
+    const collisionMarker = `${target}.antigravity-pool-collision`;
+    if (existsSync(collisionMarker)) return;
+    if (Object.hasOwn(auth, PROVIDER_ID)) {
+      writeFileSync(collisionMarker, "", { flag: "wx", mode: 0o600 });
+      return;
+    }
+    auth[PROVIDER_ID] = legacy;
+    delete auth[LEGACY_PROVIDER_ID];
+    writePrivateJson(target, auth);
   } finally {
     unlock();
   }
 }
 
-export function migrateLegacyAntigravityAuth(): void {
-  if (!readJsonObject(authPath())?.[LEGACY_PROVIDER_ID]) return;
-  updateAuthFile((auth) => {
-    const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
-    if (legacy?.type !== "oauth" || typeof legacy.refresh !== "string" || !legacy.refresh.trim() ||
-        typeof legacy.access !== "string" || typeof legacy.expires !== "number" || !Number.isFinite(legacy.expires)) return false;
-    const target = Object.hasOwn(auth, PROVIDER_ID) ? ARCHIVED_AUTH_ID : PROVIDER_ID;
-    if (Object.hasOwn(auth, target)) throw new Error("Antigravity legacy credential archive already exists.");
-    auth[target] = legacy;
-    delete auth[LEGACY_PROVIDER_ID];
-    return true;
-  });
-}
-
-function writeActiveCredential(account: StoredAccount | undefined): void {
-  updateAuthFile((auth) => {
-    if (account) {
-      auth[PROVIDER_ID] = {
-        type: "oauth",
-        email: account.email,
-        access: account.access,
-        refresh: account.refresh,
-        expires: account.expires,
-        projectId: account.projectId,
-      };
-    } else {
-      delete auth[PROVIDER_ID];
-    }
-    return true;
-  });
-}
-
-function currentAuthCredentials(): AntigravityOAuthCredentials | undefined {
-  const current = readJsonObject(authPath())?.[PROVIDER_ID];
-  if (!current || typeof current !== "object") return undefined;
+function importCurrentAuth(store: AccountsFile, current: unknown): boolean {
+  if (!current || typeof current !== "object") return false;
   const record = current as Record<string, unknown>;
-  if (typeof record.refresh !== "string" || !record.refresh) return undefined;
-  return {
+  if (typeof record.refresh !== "string" || !record.refresh) return false;
+  const credentials = {
     access: typeof record.access === "string" ? record.access : "",
     refresh: record.refresh,
     expires: typeof record.expires === "number" ? record.expires : 0,
     projectId: typeof record.projectId === "string" ? record.projectId : undefined,
     email: typeof record.email === "string" ? record.email : undefined,
   };
-}
-
-export function syncCurrentAuth(): void {
-  const credentials = currentAuthCredentials();
-  if (!credentials) return;
-  const store = loadAccountStore();
   const existing = findAccount(store, credentials);
   const account = accountFromCredentials(credentials, existing, true);
   store.accounts[account.accountId] = account;
   if (!store.activeAccountId || !store.accounts[store.activeAccountId]) {
     store.activeAccountId = account.accountId;
   }
-  saveAccountStore(store);
+  return true;
+}
+
+export function syncCurrentAuth(): void {
+  const current = readJsonObject(authPath())?.[PROVIDER_ID];
+  if (!current) return;
+  const store = loadAccountStore();
+  if (importCurrentAuth(store, current)) saveAccountStore(store);
 }
 
 export function rememberAccount(credentials: AntigravityOAuthCredentials): StoredAccount {
@@ -327,42 +307,62 @@ function apiKeyFor(account: StoredAccount): AntigravityApiKey {
   };
 }
 
-export async function activateAccount(selector: string): Promise<StoredAccount> {
-  syncCurrentAuth();
-  const store = loadAccountStore();
-  const accountId = findAccountId(store, selector);
-  if (!accountId) throw new Error(`Antigravity account not found: ${selector}`);
-  const existing = store.accounts[accountId];
-  if (!existing) throw new Error(`Antigravity account not found: ${selector}`);
-  const account = await ensureFresh(existing);
-  account.lastUsedAt = Date.now();
-  store.accounts[account.accountId] = account;
-  store.activeAccountId = account.accountId;
-  store.rotate = false;
-  saveAccountStore(store);
-  writeActiveCredential(account);
-  return account;
+async function changeAccountSelection<T>(
+  selector: string,
+  change: (store: AccountsFile, accountId: string) => Promise<{ result: T; credential?: StoredAccount | null }>,
+): Promise<T> {
+  const path = authPath();
+  try {
+    writeFileSync(path, "{}", { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const { target, unlock } = lockAuthFile(path);
+  try {
+    const auth = readLockedAuth(target);
+    const store = loadAccountStore();
+    importCurrentAuth(store, auth[PROVIDER_ID]);
+    const accountId = findAccountId(store, selector);
+    if (!accountId) throw new Error(`Antigravity account not found: ${selector}`);
+    const { result, credential } = await change(store, accountId);
+    if (credential) {
+      const { email, access, refresh, expires, projectId } = credential;
+      auth[PROVIDER_ID] = { type: "oauth", email, access, refresh, expires, projectId };
+    } else if (credential === null) {
+      delete auth[PROVIDER_ID];
+    }
+    if (credential !== undefined) writePrivateJson(target, auth);
+    saveAccountStore(store);
+    return result;
+  } finally {
+    unlock();
+  }
 }
 
-export async function removeAccount(selector: string): Promise<StoredAccount | undefined> {
-  syncCurrentAuth();
-  const store = loadAccountStore();
-  const accountId = findAccountId(store, selector);
-  if (!accountId) throw new Error(`Antigravity account not found: ${selector}`);
-  delete store.accounts[accountId];
-  let next: StoredAccount | undefined;
-  if (store.activeAccountId === accountId) {
-    next = sortedAccounts(store).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0];
+export function activateAccount(selector: string): Promise<StoredAccount> {
+  return changeAccountSelection(selector, async (store, accountId) => {
+    const account = await ensureFresh(store.accounts[accountId]);
+    account.lastUsedAt = Date.now();
+    store.accounts[accountId] = account;
+    store.activeAccountId = accountId;
+    store.rotate = false;
+    return { result: account, credential: account };
+  });
+}
+
+export function removeAccount(selector: string): Promise<StoredAccount | undefined> {
+  return changeAccountSelection(selector, async (store, accountId) => {
+    delete store.accounts[accountId];
+    if (store.activeAccountId !== accountId) return { result: undefined };
+    let next = sortedAccounts(store).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0];
     if (next) {
       next = await ensureFresh(next);
       next.lastUsedAt = Date.now();
       store.accounts[next.accountId] = next;
     }
     store.activeAccountId = next?.accountId;
-    writeActiveCredential(next);
-  }
-  saveAccountStore(store);
-  return next;
+    return { result: next, credential: next ?? null };
+  });
 }
 
 function findAccountByTokenOrId(

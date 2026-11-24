@@ -49,7 +49,7 @@ import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./antigravity/auth/oauth.ts";
 import { ENDPOINT_FALLBACKS } from "./antigravity/client/client.ts";
-import { LEGACY_PROVIDER_ID, PROVIDER_ID as ANTIGRAVITY_POOL_ID } from "./antigravity/models/models.ts";
+import { PROVIDER_ID as ANTIGRAVITY_POOL_ID } from "./antigravity/models/models.ts";
 import {
 	asRecord,
 	finiteNumber,
@@ -103,7 +103,7 @@ function readStoredCredential(
 ): StoredCredential | undefined {
 	try {
 		const raw = fs.readFileSync(authPath, "utf8");
-		const data = JSON.parse(raw) as Record<string, StoredCredential>;
+		const data = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, StoredCredential>;
 		return data?.[providerId];
 	} catch {
 		return undefined;
@@ -1104,7 +1104,7 @@ async function usageHttpError(res: Response, provider: string, secrets: string[]
 		// HTML gateways, empty bodies, and unreadable responses still have a status.
 	}
 	const hint = res.status === 401 || res.status === 403 || /invalid_grant/.test(detail)
-		? provider === "openai-codex" || provider === ANTIGRAVITY_POOL_ID || provider === LEGACY_PROVIDER_ID
+		? provider === "openai-codex" || provider === ANTIGRAVITY_POOL_ID
 			? `; use /login for ${provider} or replace the environment token${res.status === 403 ? "; check account permissions/license if it persists" : ""}`
 			: "; check API key credentials and account permissions"
 		: "";
@@ -1717,7 +1717,7 @@ async function refreshAntigravityToken(
 		signal: anySignal(signal, AbortSignal.timeout(10_000)),
 	});
 	if (!res.ok) {
-		const error = await usageHttpError(res as unknown as Response, "antigravity", [refreshToken]);
+		const error = await usageHttpError(res as unknown as Response, ANTIGRAVITY_POOL_ID, [refreshToken]);
 		throw new Error(`token refresh ${error.message}`);
 	}
 	const data = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
@@ -1774,7 +1774,7 @@ export const antigravityCfg: ProviderCfg = {
 					if (response.ok || !RETRYABLE_ANTIGRAVITY_STATUSES.has(response.status)) {
 						return { response, endpoint };
 					}
-					lastError = await usageHttpError(response, "antigravity", [token, refreshToken ?? ""]);
+					lastError = await usageHttpError(response, ANTIGRAVITY_POOL_ID, [token, refreshToken ?? ""]);
 				} catch (error) {
 					lastError = error;
 				}
@@ -1836,7 +1836,7 @@ export const antigravityCfg: ProviderCfg = {
 		}
 
 		// Multi-account store support: query all linked accounts if multiple exist
-		const agAccountsPath = path.join(os.homedir(), ".pi", "agent", "antigravity-accounts.json");
+		const agAccountsPath = path.join(getAgentDir(), "antigravity-accounts.json");
 		let agAccountsFile: {
 			activeAccountId?: string;
 			accounts?: Record<string, { accountId?: string; email?: string; access?: string; refresh?: string; expires?: number; cooldownUntil?: number }>;
@@ -1903,7 +1903,7 @@ export const antigravityCfg: ProviderCfg = {
 		let expires = 0;
 
 		if (!access) {
-			const cred = readStoredCredential(ANTIGRAVITY_POOL_ID);
+			const cred = readStoredCredential(ANTIGRAVITY_POOL_ID, path.join(getAgentDir(), "auth.json"));
 			if (cred && cred.type === "oauth") {
 				access = cred.access;
 				refreshToken = cred.refresh;
@@ -1937,7 +1937,7 @@ export const antigravityCfg: ProviderCfg = {
 		const baseUrl = quotaResult.endpoint;
 
 		if (!resQuota.ok) {
-			throw await usageHttpError(resQuota, "antigravity", [access, refreshToken ?? ""]);
+			throw await usageHttpError(resQuota, ANTIGRAVITY_POOL_ID, [access, refreshToken ?? ""]);
 		}
 		const quotaJson = await resQuota.json();
 		const { windows, resets } = parseQuotaBuckets(quotaJson);
@@ -2095,7 +2095,6 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 	zen: "opencode-go",
 	codex: "openai-codex",
 	openai: "openai-codex",
-	[LEGACY_PROVIDER_ID]: ANTIGRAVITY_POOL_ID,
 	google: ANTIGRAVITY_POOL_ID,
 	claude: "claude-cli",
 	"claude-cli": "claude-cli",

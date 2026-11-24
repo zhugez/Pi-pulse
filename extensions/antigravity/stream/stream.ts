@@ -53,7 +53,6 @@ import {
   getAntigravityRequestModelId,
   getFallbackRuntimeModel,
   getThinkingConfig,
-  LEGACY_PROVIDER_ID,
   PROVIDER_ID,
 } from "../models/models.js";
 import { extractValidationUrl, redactSecrets, safeError } from "../utils/security.js";
@@ -332,7 +331,7 @@ export function convertMessages(
         continue;
       }
       const parts: GeminiPart[] = [];
-      const isSameModel = (msg.provider === PROVIDER_ID || msg.provider === LEGACY_PROVIDER_ID) && msg.model === model.id;
+      const isSameModel = msg.provider === PROVIDER_ID && msg.model === model.id;
       const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
       const firstCallHasSig =
         toolCalls.length > 0 && isValidThoughtSignature(toolCalls[0]?.thoughtSignature);
