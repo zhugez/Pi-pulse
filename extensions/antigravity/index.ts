@@ -18,9 +18,9 @@ import {
   rememberAccount,
   removeAccount,
   setAccountRotation,
-  updateRememberedAccount,
+  refreshRememberedAccount,
 } from "./auth/accounts.js";
-import { getApiKey, loginAntigravity, refreshAntigravityToken } from "./auth/oauth.js";
+import { getApiKey, loginAntigravity } from "./auth/oauth.js";
 import { DEFAULT_ENDPOINT } from "./client/client.js";
 import { getLastDiagnostics, runWithDiagnostics } from "./diagnostics/diagnostics.js";
 import { generateAntigravityImage, parseImageCommandArgs } from "./image/image.js";
@@ -69,14 +69,6 @@ async function loginAndRemember(
   const credentials = await loginAntigravity(callbacks);
   rememberAccount(credentials);
   return credentials;
-}
-
-async function refreshAndRemember(
-  credentials: Parameters<typeof refreshAntigravityToken>[0],
-): ReturnType<typeof refreshAntigravityToken> {
-  const refreshed = await refreshAntigravityToken(credentials);
-  updateRememberedAccount(credentials, refreshed);
-  return refreshed;
 }
 
 async function withUsage(
@@ -168,7 +160,7 @@ export default function (pi: ExtensionAPI): void {
       // Pi uses this for the footer's (sub) marker and subscription-aware cost display.
       isSubscription: true,
       login: loginAndRemember,
-      refreshToken: refreshAndRemember,
+      refreshToken: refreshRememberedAccount,
       getApiKey,
     },
     streamSimple: streamAntigravity,
@@ -273,9 +265,7 @@ export default function (pi: ExtensionAPI): void {
         }
         if (command.startsWith("rotate")) {
           const sub = command.slice("rotate".length).trim().toLowerCase();
-          const current = isAccountRotationEnabled();
-          const next = sub === "on" ? true : sub === "off" ? false : !current;
-          setAccountRotation(next);
+          const next = setAccountRotation(sub === "on" ? true : sub === "off" ? false : undefined);
           emitCommandOutput(
             ctx,
             `Antigravity account rotation: ${next ? "enabled (least-recently-used)" : "disabled (single active account)"}`,

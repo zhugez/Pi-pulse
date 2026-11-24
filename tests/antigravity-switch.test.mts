@@ -7,7 +7,11 @@ import test, { type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { lockSync } from "proper-lockfile";
 import { Agent, MockAgent } from "undici";
-import { activateAccount, listAccounts, migrateLegacyAntigravityAuth, removeAccount } from "../extensions/antigravity/auth/accounts.ts";
+import {
+  acquireNextAccount, activateAccount, failoverToNextAccount, listAccountApiKeys, listAccounts,
+  markAccountCooldown, migrateLegacyAntigravityAuth, refreshRememberedAccount, rememberAccount,
+  removeAccount, setAccountRotation,
+} from "../extensions/antigravity/auth/accounts.ts";
 import registerAntigravity from "../extensions/antigravity/index.ts";
 
 function profile(t: TestContext) {
@@ -26,9 +30,9 @@ function credentials(name: string, expires = Date.now() + 3600_000) {
   return { type: "oauth", email: `${name}@example.test`, access: `${name}-access`, refresh: `${name}-refresh`, expires, projectId: "test-project" };
 }
 
-function seedSelection(t: TestContext, expires?: number) {
+function seedSelection(t: TestContext, expires?: number, activeExpires?: number) {
   const paths = profile(t);
-  const a = credentials("a");
+  const a = credentials("a", activeExpires);
   const b = credentials("b", expires);
   const auth = { "antigravity-pool": a };
   const store = { version: 1, activeAccountId: "a", rotate: true, accounts: {
@@ -136,19 +140,28 @@ test("account switch refreshes the model registry using the newly active credent
   assert.deepEqual(JSON.parse(readFileSync(accountsPath, "utf8")).accounts, {});
 });
 
-test("removing the nonactive canonical owner prevents reimport", async (t) => {
-  const { authPath, linkedPath, a, b } = seedSelection(t);
+test("removing the nonactive canonical owner needs no active OAuth refresh", async (t) => {
+  const { authPath, linkedPath, store, a, b } = seedSelection(t, undefined, 0);
+  const refresh = t.mock.method(Agent.prototype, "dispatch", () => { throw new Error("Active OAuth credential is revoked"); });
   writeFileSync(authPath, JSON.stringify({ "antigravity-pool": b }));
   await removeAccount("b");
+  assert.equal(refresh.mock.callCount(), 0);
   assert.deepEqual(JSON.parse(readFileSync(authPath, "utf8")), { "antigravity-pool": a });
   assert.deepEqual(listAccounts().map(({ accountId, active }) => ({ accountId, active })), [{ accountId: "a", active: true }]);
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(linkedPath, "utf8")).accounts), ["a"]);
+  assert.equal(JSON.parse(readFileSync(linkedPath, "utf8")).accounts.a.lastUsedAt, store.accounts.a.lastUsedAt);
+});
 
+test("Antigravity selection accepts an empty auth file", async (t) => {
+  const { authPath, b } = seedSelection(t);
   writeFileSync(authPath, "");
   await activateAccount("a");
   assert.equal(JSON.parse(readFileSync(authPath, "utf8"))["antigravity-pool"].access, "a-access");
   writeFileSync(authPath, "");
   await removeAccount("a");
+  assert.deepEqual(JSON.parse(readFileSync(authPath, "utf8")), { "antigravity-pool": b });
+  writeFileSync(authPath, "");
+  await removeAccount("b");
   assert.deepEqual(JSON.parse(readFileSync(authPath, "utf8")), {});
 });
 
@@ -203,6 +216,106 @@ for (const scenario of ["logout during switch", "replacement changes during remo
     mock.assertNoPendingInterceptors();
   });
 }
+
+function pauseOAuth(t: TestContext, expectedRefresh: string) {
+  const mock = new MockAgent();
+  mock.disableNetConnect();
+  t.after(() => mock.close());
+  const oauth = mock.get("https://oauth2.googleapis.com");
+  oauth.intercept({ path: "/token", method: "POST" }).reply(200, {
+    access_token: "paused-access", refresh_token: "paused-refresh", expires_in: 3600,
+  });
+  let dispatched!: () => void;
+  let resume!: () => void;
+  let observedRefresh: string | null = null;
+  const started = new Promise<void>((resolve) => { dispatched = resolve; });
+  const paused = new Promise<void>((resolve) => { resume = resolve; });
+  t.mock.method(Agent.prototype, "dispatch", (options: Parameters<Agent["dispatch"]>[0], handler: Parameters<Agent["dispatch"]>[1]) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      const body = options.body;
+      if (typeof body === "string" || body instanceof Uint8Array) chunks.push(Buffer.from(body));
+      else if (body && Symbol.asyncIterator in body) {
+        for await (const chunk of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
+      }
+      const payload = Buffer.concat(chunks).toString();
+      observedRefresh = new URLSearchParams(payload).get("refresh_token");
+      dispatched();
+      await paused;
+      oauth.dispatch({ ...options, body: payload }, handler);
+    })();
+    return true;
+  });
+  t.after(() => assert.equal(observedRefresh, expectedRefresh));
+  return { started, resume };
+}
+
+test("Antigravity discovery discards a paused refresh after removal", { timeout: 5000 }, async (t) => {
+  const { linkedPath } = seedSelection(t, 0);
+  const { started, resume } = pauseOAuth(t, "b-refresh");
+  const pending = listAccountApiKeys();
+  await started;
+  try {
+    await removeAccount("b");
+    markAccountCooldown("a");
+  } finally { resume(); }
+  assert.deepEqual((await pending).map(({ token }) => token), ["a-access"]);
+  const store = JSON.parse(readFileSync(linkedPath, "utf8"));
+  assert.deepEqual(Object.keys(store.accounts), ["a"]);
+  assert.ok(store.accounts.a.cooldownUntil > Date.now());
+});
+
+for (const pinned of [false, true]) {
+  test(`Antigravity ${pinned ? "pinned" : "rotating"} refresh cannot undo a switch`, { timeout: 5000 }, async (t) => {
+    const { authPath, linkedPath } = seedSelection(t, undefined, 0);
+    setAccountRotation(!pinned);
+    const { started, resume } = pauseOAuth(t, "a-refresh");
+    const pending = acquireNextAccount();
+    await started;
+    try {
+      await activateAccount("b");
+      markAccountCooldown("a");
+    } finally { resume(); }
+    await pending;
+    const store = JSON.parse(readFileSync(linkedPath, "utf8"));
+    assert.equal(store.activeAccountId, "b");
+    assert.equal(store.rotate, false);
+    assert.equal(store.accounts.a.refresh, "paused-refresh");
+    assert.ok(store.accounts.a.cooldownUntil > Date.now());
+    assert.equal(JSON.parse(readFileSync(authPath, "utf8"))["antigravity-pool"].refresh, "b-refresh");
+  });
+}
+
+test("Antigravity failover discards a paused result after credentials change", { timeout: 5000 }, async (t) => {
+  const { linkedPath } = seedSelection(t, 0);
+  const { started, resume } = pauseOAuth(t, "b-refresh");
+  const pending = failoverToNextAccount(new Set(["a-access"]));
+  await started;
+  try {
+    rememberAccount({ ...credentials("b"), refresh: "newer-refresh" });
+    markAccountCooldown("a");
+  } finally { resume(); }
+  assert.equal(await pending, undefined);
+  const store = JSON.parse(readFileSync(linkedPath, "utf8"));
+  assert.equal(store.accounts.b.refresh, "newer-refresh");
+  assert.ok(store.accounts.a.cooldownUntil > Date.now());
+});
+
+test("Antigravity native refresh uses linked credentials and refuses a stale result", { timeout: 5000 }, async (t) => {
+  const { authPath, linkedPath, a } = seedSelection(t, undefined, 0);
+  rememberAccount({ ...a, refresh: "linked-refresh" });
+  const { started, resume } = pauseOAuth(t, "linked-refresh");
+  const unlock = lockSync(authPath, { stale: 30_000 });
+  try {
+    const pending = refreshRememberedAccount(a);
+    await started;
+    try {
+      rememberAccount({ ...credentials("a"), refresh: "latest-refresh" });
+    } finally { resume(); }
+    await assert.rejects(pending, /linked credentials changed/);
+  } finally { unlock(); }
+  assert.equal(JSON.parse(readFileSync(linkedPath, "utf8")).accounts.a.refresh, "latest-refresh");
+});
 
 test("Antigravity switch and removal publish neither file if second staging write fails", async (t) => {
   const { dir, authPath, linkedPath } = seedSelection(t);

@@ -97,14 +97,21 @@ export class MissingCredentialError extends Error {
 
 const AUTH_PATH = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
-function readStoredCredential(
-	providerId: string,
-	authPath = AUTH_PATH,
-): StoredCredential | undefined {
+function readStoredCredential(providerId: string): StoredCredential | undefined {
 	try {
-		const raw = fs.readFileSync(authPath, "utf8");
-		const data = JSON.parse(raw.replace(/^\uFEFF/, "")) as Record<string, StoredCredential>;
+		const raw = fs.readFileSync(AUTH_PATH, "utf8");
+		const data = JSON.parse(raw) as Record<string, StoredCredential>;
 		return data?.[providerId];
+	} catch {
+		return undefined;
+	}
+}
+
+function readAntigravityCredential(): StoredCredential | undefined {
+	try {
+		const raw = fs.readFileSync(path.join(getAgentDir(), "auth.json"), "utf8");
+		const data = JSON.parse((raw || "{}").replace(/^\uFEFF/, "")) as Record<string, StoredCredential>;
+		return data?.[ANTIGRAVITY_POOL_ID];
 	} catch {
 		return undefined;
 	}
@@ -1904,7 +1911,7 @@ export const antigravityCfg: ProviderCfg = {
 		let expires = 0;
 
 		if (!access) {
-			const cred = readStoredCredential(ANTIGRAVITY_POOL_ID, path.join(getAgentDir(), "auth.json"));
+			const cred = readAntigravityCredential();
 			if (cred && cred.type === "oauth") {
 				access = cred.access;
 				refreshToken = cred.refresh;

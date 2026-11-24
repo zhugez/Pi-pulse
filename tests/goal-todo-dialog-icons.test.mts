@@ -69,7 +69,7 @@ const tasks: Task[] = [
   { id: 3, subject: 'Tiếp theo 中文 e\u0301 '.repeat(5), status: 'pending' },
 ];
 
-function checkLines(name: string, lines: string[], width: number): void {
+function checkLines(name: string, lines: readonly string[], width: number): void {
   assert.ok(lines.length, `${name}: component must render`);
   for (const line of lines) {
     assert.doesNotMatch(line, OLD, `${name}: retired marker in ${JSON.stringify(line)}`);

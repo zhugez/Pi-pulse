@@ -407,7 +407,7 @@ test("Antigravity usage neither exposes nor reuses another profile's disk cache"
 	const defaultDir = join(home, ".pi", "agent");
 	mkdirSync(profile);
 	mkdirSync(defaultDir, { recursive: true });
-	const env = { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: profile, ANTIGRAVITY_BASE_URL: "https://quota.example.test", ANTIGRAVITY_TOKEN: "", ANTIGRAVITY_API_KEY: "" };
+	const env = { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: profile, ANTIGRAVITY_BASE_URL: "https://quota.example.test", ANTIGRAVITY_TOKEN: "", ANTIGRAVITY_API_KEY: "", OPENCODE_API_KEY: "" };
 	const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
 	Object.assign(process.env, env);
 	t.after(() => {
@@ -426,9 +426,14 @@ test("Antigravity usage neither exposes nor reuses another profile's disk cache"
 	});
 	writeFileSync(diskCache, cached);
 	writeFileSync(join(profile, "auth.json"), JSON.stringify({ "antigravity-pool": { type: "oauth", access: "personal-token" } }));
+	writeFileSync(join(defaultDir, "auth.json"), `\uFEFF${JSON.stringify({ "opencode-go": { type: "api_key", key: "unused-test-key" } })}`);
 
 	const moduleUrl = new URL("../extensions/subscription-usage.js?isolated-cache", import.meta.url);
-	const { default: register } = await import(moduleUrl.href) as typeof import("../extensions/subscription-usage.ts");
+	const { default: register, opencodeCfg, MissingCredentialError } = await import(moduleUrl.href) as typeof import("../extensions/subscription-usage.ts");
+	const unrelatedFetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected OpenCode usage request"); });
+	await assert.rejects(opencodeCfg.fetchUsage(), MissingCredentialError);
+	assert.equal(unrelatedFetch.mock.callCount(), 0);
+	unrelatedFetch.mock.restore();
 	let run!: (args: string, ctx: ExtensionCommandContext) => void | Promise<void>;
 	const events = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
 	register({

@@ -31,7 +31,7 @@ export class SettingsListAdapter {
     this.list.invalidate();
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.list.render(width);
   }
 

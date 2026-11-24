@@ -31,7 +31,7 @@ export class ManualAdvisorProgressComponent implements Component {
     this.theme = theme;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     const box = renderAdvisorCallBox(this.question, this.theme);
 
     if (this.state.phase === "complete" || this.state.phase === "cancelled") {
