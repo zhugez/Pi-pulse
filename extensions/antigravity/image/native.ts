@@ -1,6 +1,6 @@
 import type { AssistantImages, ImagesContext, ImagesOptions } from "@earendil-works/pi-ai";
 import { DEFAULT_IMAGE_MODEL, generateAntigravityImageContent } from "./image.js";
-import { PROVIDER_ID } from "../models/models.js";
+import { PROVIDER_ID } from '../models/models.js';
 import { safeError } from "../utils/security.js";
 
 export const ANTIGRAVITY_IMAGE_API = "antigravity-images";
@@ -27,8 +27,7 @@ export async function generateAntigravityImages(
   const identity = { api: model.api, provider: model.provider, model: model.id };
   try {
     if (options?.signal?.aborted) throw new Error("Request was aborted");
-    if (!options?.apiKey)
-      throw new Error(`No Antigravity credentials. Run /login ${PROVIDER_ID} first.`);
+    if (!options?.apiKey) throw new Error(`No Antigravity credentials. Run /login ${PROVIDER_ID} first.`);
     const ratio = options.metadata?.aspectRatio;
     if (ratio !== undefined && typeof ratio !== "string")
       throw new Error("aspectRatio must be a string.");

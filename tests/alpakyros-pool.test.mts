@@ -12,7 +12,7 @@ const message = (): AssistantMessage => ({ role: "assistant", content: [], api: 
 
 for (const status of [429, 401, 403, 500, 400]) {
   const shouldFailOver = status !== 400;
-  test(`pool ${shouldFailOver ? "fails over and sticks to the successful key" : "does not fail over"} for HTTP ${status}`, async () => {
+  test(`pool ${shouldFailOver ? 'fails over and sticks to the successful key' : 'does not fail over'} for HTTP ${status}`, async () => {
     const tried: string[] = [];
     const delegate = ((_model: unknown, _ctx: unknown, options: any) => {
       const stream = createAssistantMessageEventStream();
@@ -29,11 +29,11 @@ for (const status of [429, 401, 403, 500, 400]) {
     const pool = createPoolStream([{ key: "a" }, { key: "b" }], delegate);
     const options = { fetch: async () => new Response(null, { status: tried.at(-1) === "a" ? status : 200 }) };
     const first = await pool(model, context, options).result();
-    assert.deepEqual(tried, shouldFailOver ? ["a", "b"] : ["a"]);
-    assert.equal(first.stopReason, shouldFailOver ? "stop" : "error");
+    assert.deepEqual(tried, shouldFailOver ? ['a', 'b'] : ['a']);
+    assert.equal(first.stopReason, shouldFailOver ? 'stop' : 'error');
     if (shouldFailOver) {
       await pool(model, context, options).result();
-      assert.deepEqual(tried, ["a", "b", "b"]);
+      assert.deepEqual(tried, ['a', 'b', 'b']);
     }
   });
 }

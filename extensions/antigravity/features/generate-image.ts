@@ -11,7 +11,7 @@ import {
   generateAntigravityImage,
   IMAGE_ASPECT_RATIOS,
 } from "../image/image.js";
-import { PROVIDER_ID } from "../models/models.js";
+import { PROVIDER_ID } from '../models/models.js';
 import { isExtraToolEnabled } from "../utils/util.js";
 
 export default function (pi: ExtensionAPI): void {

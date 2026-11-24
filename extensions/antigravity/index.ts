@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import {
   ANTIGRAVITY_IMAGE_API,
   ANTIGRAVITY_IMAGE_MODELS,
@@ -20,7 +20,7 @@ import {
   setAccountRotation,
   refreshRememberedAccount,
 } from "./auth/accounts.js";
-import { getApiKey, loginAntigravity } from "./auth/oauth.js";
+import { getApiKey, loginAntigravity } from './auth/oauth.js';
 import { DEFAULT_ENDPOINT } from "./client/client.js";
 import { getLastDiagnostics, runWithDiagnostics } from "./diagnostics/diagnostics.js";
 import { generateAntigravityImage, parseImageCommandArgs } from "./image/image.js";
@@ -136,7 +136,7 @@ export default function (pi: ExtensionAPI): void {
   registerCompatApiProvider();
 
   try {
-    const storePath = join(getAgentDir(), "models-store.json");
+    const storePath = join(getAgentDir(), 'models-store.json');
     if (existsSync(storePath)) {
       const store = JSON.parse(readFileSync(storePath, "utf8"));
       hydrateAntigravityCatalog(store[PROVIDER_ID]);
@@ -197,11 +197,11 @@ export default function (pi: ExtensionAPI): void {
     }
   }
 
-  pi.registerCommand("antigravity.migrate", {
-    description: "Move a legacy Antigravity OAuth login to Antigravity Pool once",
+  pi.registerCommand('antigravity.migrate', {
+    description: 'Move a legacy Antigravity OAuth login to Antigravity Pool once',
     handler: async (args, ctx) => {
       if (args.trim()) {
-        emitCommandOutput(ctx, "Usage: /antigravity.migrate", "warning");
+        emitCommandOutput(ctx, 'Usage: /antigravity.migrate', 'warning');
         return;
       }
       try {
@@ -209,13 +209,13 @@ export default function (pi: ExtensionAPI): void {
         const messages = {
           migrated: `Moved the legacy OAuth login to ${PROVIDER_ID}. Restart Pi and select the model under ${PROVIDER_ID}.`,
           collision: `Both Antigravity credential entries exist. Neither entry changed.`,
-          absent: "No legacy Antigravity credential to migrate.",
-          invalid: "The legacy Antigravity credential is not a valid OAuth login. It did not change.",
+          absent: 'No legacy Antigravity credential to migrate.',
+          invalid: 'The legacy Antigravity credential is not a valid OAuth login. It did not change.',
         };
-        emitCommandOutput(ctx, messages[result], result === "collision" || result === "invalid" ? "warning" : "info");
+        emitCommandOutput(ctx, messages[result], result === 'collision' || result === 'invalid' ? 'warning' : 'info');
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        emitCommandOutput(ctx, `Antigravity migration failed: ${redactSecrets(msg)}`, "error");
+        emitCommandOutput(ctx, `Antigravity migration failed: ${redactSecrets(msg)}`, 'error');
       }
     },
   });
@@ -265,7 +265,7 @@ export default function (pi: ExtensionAPI): void {
         }
         if (command.startsWith("rotate")) {
           const sub = command.slice("rotate".length).trim().toLowerCase();
-          const next = setAccountRotation(sub === "on" ? true : sub === "off" ? false : undefined);
+          const next = setAccountRotation(sub === 'on' ? true : sub === 'off' ? false : undefined);
           emitCommandOutput(
             ctx,
             `Antigravity account rotation: ${next ? "enabled (least-recently-used)" : "disabled (single active account)"}`,

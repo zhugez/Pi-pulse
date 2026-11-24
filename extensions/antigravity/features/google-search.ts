@@ -5,7 +5,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { PROVIDER_ID } from "../models/models.js";
+import { PROVIDER_ID } from '../models/models.js';
 import { executeAntigravitySearch } from "../search/search.js";
 import { isExtraToolEnabled } from "../utils/util.js";
 import { redactSecrets } from "../utils/security.js";

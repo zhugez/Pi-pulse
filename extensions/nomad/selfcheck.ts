@@ -84,12 +84,15 @@ const tor = createEgress({ OCI_EGRESS: "TOR", OCI_MAX_ATTEMPTS: "2", OCI_TOR_CON
   async (port, password) => { assert.equal(port, 19051); assert.equal(password, "secret"); signals++; });
 assert.equal(tor.proxy, "socks5://127.0.0.1:9050");
 let attempts = 0;
-const success = await tor.send(async () => ++attempts === 1 ? freeLimit() : new Response("ok"));
+const success = await tor.send(async () => (++attempts === 1 ? freeLimit() : new Response('ok')));
 assert.equal(await success.text(), "ok");
 assert.equal(attempts, 2);
 assert.equal(signals, 1);
 attempts = 0;
-await tor.send(async () => { attempts++; return freeLimit(); });
+await tor.send(async () => {
+  attempts++;
+  return freeLimit();
+});
 assert.equal(attempts, 2);
 const beforeSignals = signals;
 for (const response of [new Response("ModelDeprecated", { status: 429 }), new Response("FreeUsageLimitError", { status: 500 })]) {

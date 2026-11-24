@@ -13,7 +13,7 @@ import {
   setLastProjectId,
   setLastStatus,
 } from "../diagnostics/diagnostics.js";
-import { PROVIDER_ID } from "../models/models.js";
+import { PROVIDER_ID } from '../models/models.js';
 import { isRecord } from "../utils/util.js";
 import { safeError } from "../utils/security.js";
 import { antigravityFetch } from "../utils/http.js";

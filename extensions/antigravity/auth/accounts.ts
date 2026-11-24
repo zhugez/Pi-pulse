@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { lockSync } from "proper-lockfile";
+import { lstatSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from '@earendil-works/pi-coding-agent';
+import { lockSync } from 'proper-lockfile';
 import { defaultProjectId } from "../client/client.js";
-import { LEGACY_PROVIDER_ID, PROVIDER_ID } from "../models/models.js";
+import { LEGACY_PROVIDER_ID, PROVIDER_ID } from '../models/models.js';
 import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
 import { refreshAntigravityToken } from "./oauth.js";
 
@@ -59,14 +59,14 @@ function authPath(): string {
 function readJsonObject(path: string, allowEmpty = false): Record<string, unknown> | undefined {
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readFileSync(path, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  if (allowEmpty && raw === "") return {};
-  const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+  if (allowEmpty && raw === '') return {};
+  const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ''));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected a JSON object');
   return parsed as Record<string, unknown>;
 }
 
@@ -74,10 +74,10 @@ function writePrivateJson(...files: [path: string, value: unknown][]): void {
   const staged: { dir: string; temp: string; path: string }[] = [];
   try {
     for (const [path, value] of files) {
-      const dir = mkdtempSync(join(dirname(path), ".antigravity-"));
-      const temp = join(dir, "state.json");
+      const dir = mkdtempSync(join(dirname(path), '.antigravity-'));
+      const temp = join(dir, 'state.json');
       staged.push({ dir, temp, path });
-      writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
     }
     for (const { temp, path } of staged) renameSync(temp, path);
   } finally {
@@ -211,7 +211,7 @@ function withFileLock<T>(path: string, use: (target: string) => T): T {
   try {
     target = realpathSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || lstatSync(path, { throwIfNoEntry: false })) throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || lstatSync(path, { throwIfNoEntry: false })) throw error;
     target = join(realpathSync(dirname(path)), basename(path));
   }
   const unlock = lockSync(target, { realpath: false, stale: 30_000, update: 15_000 });
@@ -228,16 +228,16 @@ function withLockedAuth<T>(path: string, use: (auth: Record<string, unknown>, ta
     try {
       auth = readJsonObject(target, true) ?? {};
     } catch {
-      throw new Error("Refusing to overwrite unreadable Pi auth.json");
+      throw new Error('Refusing to overwrite unreadable Pi auth.json');
     }
     return use(auth, target);
   });
 }
 
-export function migrateLegacyAntigravityAuth(): "migrated" | "collision" | "absent" | "invalid" {
+export function migrateLegacyAntigravityAuth(): 'migrated' | 'collision' | 'absent' | 'invalid' {
   return withLockedAuth(authPath(), (auth, target) => {
-    if (!Object.hasOwn(auth, LEGACY_PROVIDER_ID)) return "absent";
-    if (Object.hasOwn(auth, PROVIDER_ID)) return "collision";
+    if (!Object.hasOwn(auth, LEGACY_PROVIDER_ID)) return 'absent';
+    if (Object.hasOwn(auth, PROVIDER_ID)) return 'collision';
     const legacy = auth[LEGACY_PROVIDER_ID] as Partial<AntigravityOAuthCredentials & { type: string }> | undefined;
     if (
       legacy?.type !== 'oauth' ||
@@ -251,7 +251,7 @@ export function migrateLegacyAntigravityAuth(): "migrated" | "collision" | "abse
     auth[PROVIDER_ID] = legacy;
     delete auth[LEGACY_PROVIDER_ID];
     writePrivateJson([target, auth]);
-    return "migrated";
+    return 'migrated';
   });
 }
 
@@ -267,9 +267,8 @@ function importCurrentAuth(store: AccountsFile, current: unknown): string | unde
     email: typeof record.email === "string" ? record.email : undefined,
   };
   const existing = findAccount(store, credentials);
-  const account = existing && existing.expires > credentials.expires
-    ? existing
-    : accountFromCredentials(credentials, existing, true);
+  const account =
+    existing && existing.expires > credentials.expires ? existing : accountFromCredentials(credentials, existing, true);
   store.accounts[account.accountId] = account;
   if (!store.activeAccountId || !store.accounts[store.activeAccountId]) {
     store.activeAccountId = account.accountId;
@@ -305,7 +304,7 @@ export async function refreshRememberedAccount(credentials: OAuthCredentials): P
   const linked = findAccount(loadAccountStore(), credentials);
   const refreshed = await refreshAntigravityToken(linked ?? credentials);
   if (linked && !commitRefreshedAccount(linked, refreshed, false)) {
-    throw new Error("Antigravity linked credentials changed during refresh. Retry the request.");
+    throw new Error('Antigravity linked credentials changed during refresh. Retry the request.');
   }
   return refreshed;
 }
@@ -367,7 +366,7 @@ function commitRefreshedAccount(
   return result;
 }
 
-async function changeAccountSelection(selector: string, action: "switch" | "remove") {
+async function changeAccountSelection(selector: string, action: 'switch' | 'remove') {
   const authFile = authPath();
   const linkedFile = accountsPath();
   function readSelection(store: AccountsFile, auth: Record<string, unknown>, target: string) {
@@ -378,8 +377,8 @@ async function changeAccountSelection(selector: string, action: "switch" | "remo
     const accountId = findAccountId(store, selector);
     if (!accountId) return undefined;
     const removingActive = store.activeAccountId === accountId;
-    const changesAuth = action === "switch" || removingActive || canonicalId === accountId;
-    const selectsAccount = action === "switch" || removingActive;
+    const changesAuth = action === 'switch' || removingActive || canonicalId === accountId;
+    const selectsAccount = action === 'switch' || removingActive;
     const next =
       action === 'switch'
         ? store.accounts[accountId]
@@ -409,39 +408,42 @@ async function changeAccountSelection(selector: string, action: "switch" | "remo
   }
 
   const before = withLockedAuth(authFile, (auth, target) =>
-    withLockedAccounts(linkedFile, (store) => readSelection(store, auth, target)));
+    withLockedAccounts(linkedFile, (store) => readSelection(store, auth, target)),
+  );
   if (!before) throw new Error(`Antigravity account not found: ${selector}`);
   const fresh = before.selectsAccount && before.next ? await ensureFresh(before.next) : undefined;
-  return withLockedAuth(authFile, (auth, target) => withLockedAccounts(linkedFile, (store, linkedTarget) => {
-    const current = readSelection(store, auth, target);
-    if (!current || !isDeepStrictEqual(current.version, before.version)) {
-      throw new Error("Antigravity account selection changed. Retry the command.");
-    }
-    const { accountId, next, selectsAccount, changesAuth } = current;
-    if (action === "remove") delete store.accounts[accountId];
-    else store.rotate = false;
-    const account = fresh && next ? { ...next, ...credentialFields(fresh), lastUsedAt: Date.now() } : next;
-    if (selectsAccount) {
-      if (account) store.accounts[account.accountId] = account;
-      store.activeAccountId = account?.accountId;
-    }
-    if (changesAuth) {
-      if (account) auth[PROVIDER_ID] = { type: "oauth", ...credentialFields(account) };
-      else delete auth[PROVIDER_ID];
-      writePrivateJson([target, auth], [linkedTarget, store]);
-    } else {
-      writePrivateJson([linkedTarget, store]);
-    }
-    return selectsAccount ? account : undefined;
-  }));
+  return withLockedAuth(authFile, (auth, target) =>
+    withLockedAccounts(linkedFile, (store, linkedTarget) => {
+      const current = readSelection(store, auth, target);
+      if (!current || !isDeepStrictEqual(current.version, before.version)) {
+        throw new Error('Antigravity account selection changed. Retry the command.');
+      }
+      const { accountId, next, selectsAccount, changesAuth } = current;
+      if (action === 'remove') delete store.accounts[accountId];
+      else store.rotate = false;
+      const account = fresh && next ? { ...next, ...credentialFields(fresh), lastUsedAt: Date.now() } : next;
+      if (selectsAccount) {
+        if (account) store.accounts[account.accountId] = account;
+        store.activeAccountId = account?.accountId;
+      }
+      if (changesAuth) {
+        if (account) auth[PROVIDER_ID] = { type: 'oauth', ...credentialFields(account) };
+        else delete auth[PROVIDER_ID];
+        writePrivateJson([target, auth], [linkedTarget, store]);
+      } else {
+        writePrivateJson([linkedTarget, store]);
+      }
+      return selectsAccount ? account : undefined;
+    }),
+  );
 }
 
 export async function activateAccount(selector: string): Promise<StoredAccount> {
-  return (await changeAccountSelection(selector, "switch"))!;
+  return (await changeAccountSelection(selector, 'switch'))!;
 }
 
 export function removeAccount(selector: string): Promise<StoredAccount | undefined> {
-  return changeAccountSelection(selector, "remove");
+  return changeAccountSelection(selector, 'remove');
 }
 
 function findAccountByTokenOrId(

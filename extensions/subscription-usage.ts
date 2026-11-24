@@ -49,7 +49,7 @@ import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./antigravity/auth/oauth.ts";
 import { ENDPOINT_FALLBACKS } from "./antigravity/client/client.ts";
-import { PROVIDER_ID as ANTIGRAVITY_POOL_ID } from "./antigravity/models/models.ts";
+import { PROVIDER_ID as ANTIGRAVITY_POOL_ID } from './antigravity/models/models.ts';
 import {
 	asRecord,
 	finiteNumber,
@@ -108,13 +108,13 @@ function readStoredCredential(providerId: string): StoredCredential | undefined 
 }
 
 function readAntigravityCredential(): StoredCredential | undefined {
-	try {
-		const raw = fs.readFileSync(path.join(getAgentDir(), "auth.json"), "utf8");
-		const data = JSON.parse((raw || "{}").replace(/^\uFEFF/, "")) as Record<string, StoredCredential>;
-		return data?.[ANTIGRAVITY_POOL_ID];
-	} catch {
-		return undefined;
-	}
+  try {
+    const raw = fs.readFileSync(path.join(getAgentDir(), 'auth.json'), 'utf8');
+    const data = JSON.parse((raw || '{}').replace(/^\uFEFF/, '')) as Record<string, StoredCredential>;
+    return data?.[ANTIGRAVITY_POOL_ID];
+  } catch {
+    return undefined;
+  }
 }
 
 const INTERVAL_MS = 5 * 60 * 1000; // idle refresh fallback

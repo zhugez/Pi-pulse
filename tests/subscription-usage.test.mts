@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from "node:test";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from '@earendil-works/pi-coding-agent';
+
 import {
 	bar,
 	antigravityEndpointCandidates,
@@ -355,126 +356,160 @@ test("antigravity endpoint candidates use the canonical daily service first", ()
 	);
 });
 
-test("Antigravity quota uses the selected profile and names the canonical login", async (t) => {
-	const dir = mkdtempSync(join(tmpdir(), "ag-quota-profile-"));
-	const env = {
-		PI_CODING_AGENT_DIR: dir,
-		ANTIGRAVITY_BASE_URL: "https://quota.example.test",
-		ANTIGRAVITY_TOKEN: "",
-		ANTIGRAVITY_API_KEY: "",
-	};
-	const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
-	Object.assign(process.env, env);
-	t.after(() => {
-		for (const [key, value] of previous) {
-			if (value === undefined) delete process.env[key];
-			else process.env[key] = value;
-		}
-		rmSync(dir, { recursive: true, force: true });
-	});
+test('Antigravity quota uses the selected profile and names the canonical login', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'ag-quota-profile-'));
+  const env = {
+    PI_CODING_AGENT_DIR: dir,
+    ANTIGRAVITY_BASE_URL: 'https://quota.example.test',
+    ANTIGRAVITY_TOKEN: '',
+    ANTIGRAVITY_API_KEY: '',
+  };
+  const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
+  Object.assign(process.env, env);
+  t.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-	writeFileSync(join(dir, "auth.json"), `\uFEFF${JSON.stringify({
-		"antigravity-pool": { type: "oauth", access: "profile-token" },
-	})}`);
-	let status = 403;
-	const tokens: string[] = [];
-	t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
-		const token = new Headers(init.headers).get("Authorization")!;
-		assert.ok(url.startsWith(env.ANTIGRAVITY_BASE_URL));
-		if (url.endsWith(":loadCodeAssist")) return Response.json({});
-		tokens.push(token);
-		if (status !== 200) return new Response("denied", { status });
-		return Response.json({ groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.5 }] }] });
-	});
-	for (status of [403, 401]) {
-		await assert.rejects(antigravityCfg.fetchUsage(), /use \/login for antigravity-pool\b/);
-	}
-	assert.deepEqual(tokens.splice(0), ["Bearer profile-token", "Bearer profile-token"]);
+  writeFileSync(
+    join(dir, 'auth.json'),
+    `\uFEFF${JSON.stringify({
+      'antigravity-pool': { type: 'oauth', access: 'profile-token' },
+    })}`,
+  );
+  let status = 403;
+  const tokens: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    const token = new Headers(init.headers).get('Authorization')!;
+    assert.ok(url.startsWith(env.ANTIGRAVITY_BASE_URL));
+    if (url.endsWith(':loadCodeAssist')) return Response.json({});
+    tokens.push(token);
+    if (status !== 200) return new Response('denied', { status });
+    return Response.json({ groups: [{ buckets: [{ bucketId: 'gemini-5h', remainingFraction: 0.5 }] }] });
+  });
+  for (status of [403, 401]) {
+    await assert.rejects(antigravityCfg.fetchUsage(), /use \/login for antigravity-pool\b/);
+  }
+  assert.deepEqual(tokens.splice(0), ['Bearer profile-token', 'Bearer profile-token']);
 
-	writeFileSync(join(dir, "antigravity-accounts.json"), JSON.stringify({
-		activeAccountId: "one",
-		accounts: { one: { access: "linked-one" }, two: { access: "linked-two" } },
-	}));
-	status = 200;
-	const usage = await antigravityCfg.fetchUsage();
-	assert.deepEqual(tokens.sort(), ["Bearer linked-one", "Bearer linked-two"]);
-	assert.equal(usage.accounts?.find((account) => account.active)?.id, "one");
+  writeFileSync(
+    join(dir, 'antigravity-accounts.json'),
+    JSON.stringify({
+      activeAccountId: 'one',
+      accounts: { one: { access: 'linked-one' }, two: { access: 'linked-two' } },
+    }),
+  );
+  status = 200;
+  const usage = await antigravityCfg.fetchUsage();
+  assert.deepEqual(tokens.sort(), ['Bearer linked-one', 'Bearer linked-two']);
+  assert.equal(usage.accounts?.find((account) => account.active)?.id, 'one');
 });
 
 test("Antigravity usage neither exposes nor reuses another profile's disk cache", { timeout: 5000 }, async (t) => {
-	const home = mkdtempSync(join(tmpdir(), "ag-quota-cache-"));
-	const profile = join(home, "personal");
-	const defaultDir = join(home, ".pi", "agent");
-	mkdirSync(profile);
-	mkdirSync(defaultDir, { recursive: true });
-	const env = { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: profile, ANTIGRAVITY_BASE_URL: "https://quota.example.test", ANTIGRAVITY_TOKEN: "", ANTIGRAVITY_API_KEY: "", OPENCODE_API_KEY: "" };
-	const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
-	Object.assign(process.env, env);
-	t.after(() => {
-		for (const [key, value] of previous) {
-			if (value === undefined) delete process.env[key];
-			else process.env[key] = value;
-		}
-		rmSync(home, { recursive: true, force: true });
-	});
-	const diskCache = join(defaultDir, "subscription-usage-cache.json");
-	const cached = JSON.stringify({
-		"antigravity-pool": { fetchedAt: Date.now(), data: {
-			windows: { "gemini-5h": 99 }, accounts: [{ id: "foreign@example.test", windows: { "gemini-5h": 99 } }],
-		} },
-		"opencode-go": { fetchedAt: Date.now(), data: { plan: "Shared test plan", windows: { "5h": 10 } } },
-	});
-	writeFileSync(diskCache, cached);
-	writeFileSync(join(profile, "auth.json"), JSON.stringify({ "antigravity-pool": { type: "oauth", access: "personal-token" } }));
-	writeFileSync(join(defaultDir, "auth.json"), `\uFEFF${JSON.stringify({ "opencode-go": { type: "api_key", key: "unused-test-key" } })}`);
+  const home = mkdtempSync(join(tmpdir(), 'ag-quota-cache-'));
+  const profile = join(home, 'personal');
+  const defaultDir = join(home, '.pi', 'agent');
+  mkdirSync(profile);
+  mkdirSync(defaultDir, { recursive: true });
+  const env = {
+    HOME: home,
+    USERPROFILE: home,
+    PI_CODING_AGENT_DIR: profile,
+    ANTIGRAVITY_BASE_URL: 'https://quota.example.test',
+    ANTIGRAVITY_TOKEN: '',
+    ANTIGRAVITY_API_KEY: '',
+    OPENCODE_API_KEY: '',
+  };
+  const previous = Object.keys(env).map((key) => [key, process.env[key]] as const);
+  Object.assign(process.env, env);
+  t.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+  const diskCache = join(defaultDir, 'subscription-usage-cache.json');
+  const cached = JSON.stringify({
+    'antigravity-pool': {
+      fetchedAt: Date.now(),
+      data: {
+        windows: { 'gemini-5h': 99 },
+        accounts: [{ id: 'foreign@example.test', windows: { 'gemini-5h': 99 } }],
+      },
+    },
+    'opencode-go': { fetchedAt: Date.now(), data: { plan: 'Shared test plan', windows: { '5h': 10 } } },
+  });
+  writeFileSync(diskCache, cached);
+  writeFileSync(
+    join(profile, 'auth.json'),
+    JSON.stringify({ 'antigravity-pool': { type: 'oauth', access: 'personal-token' } }),
+  );
+  writeFileSync(
+    join(defaultDir, 'auth.json'),
+    `\uFEFF${JSON.stringify({ 'opencode-go': { type: 'api_key', key: 'unused-test-key' } })}`,
+  );
 
-	const moduleUrl = new URL("../extensions/subscription-usage.js?isolated-cache", import.meta.url);
-	const { default: register, opencodeCfg, MissingCredentialError } = await import(moduleUrl.href) as typeof import("../extensions/subscription-usage.ts");
-	const unrelatedFetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected OpenCode usage request"); });
-	await assert.rejects(opencodeCfg.fetchUsage(), MissingCredentialError);
-	assert.equal(unrelatedFetch.mock.callCount(), 0);
-	unrelatedFetch.mock.restore();
-	let run!: (args: string, ctx: ExtensionCommandContext) => void | Promise<void>;
-	const events = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
-	register({
-		registerCommand(_name: string, command: { handler: typeof run }) { run = command.handler; },
-		on(name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) {
-			events.set(name, [...(events.get(name) ?? []), handler]);
-		},
-	} as unknown as ExtensionAPI);
-	const notify: string[] = [];
-	let signalRendered!: () => void;
-	const rendered = new Promise<void>((resolve) => { signalRendered = resolve; });
-	const ui = {
-		theme: mockTheme,
-		notify: (text: string) => notify.push(text),
-		setStatus: (provider: string, text?: string) => {
-			if (provider === "antigravity-pool" && text) signalRendered();
-		},
-	};
-	await run("", { ui } as unknown as ExtensionCommandContext);
-	assert.match(notify.at(-1)!, /Shared test plan/);
-	assert.doesNotMatch(notify.at(-1)!, /foreign@example\.test/);
+  const moduleUrl = new URL('../extensions/subscription-usage.js?isolated-cache', import.meta.url);
+  const {
+    default: register,
+    opencodeCfg,
+    MissingCredentialError,
+  } = (await import(moduleUrl.href)) as typeof import('../extensions/subscription-usage.ts');
+  const unrelatedFetch = t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('Unexpected OpenCode usage request');
+  });
+  await assert.rejects(opencodeCfg.fetchUsage(), MissingCredentialError);
+  assert.equal(unrelatedFetch.mock.callCount(), 0);
+  unrelatedFetch.mock.restore();
+  let run!: (args: string, ctx: ExtensionCommandContext) => void | Promise<void>;
+  const events = new Map<string, ((event: unknown, ctx: ExtensionContext) => unknown)[]>();
+  register({
+    registerCommand(_name: string, command: { handler: typeof run }) {
+      run = command.handler;
+    },
+    on(name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) {
+      events.set(name, [...(events.get(name) ?? []), handler]);
+    },
+  } as unknown as ExtensionAPI);
+  const notify: string[] = [];
+  let signalRendered!: () => void;
+  const rendered = new Promise<void>((resolve) => {
+    signalRendered = resolve;
+  });
+  const ui = {
+    theme: mockTheme,
+    notify: (text: string) => notify.push(text),
+    setStatus: (provider: string, text?: string) => {
+      if (provider === 'antigravity-pool' && text) signalRendered();
+    },
+  };
+  await run('', { ui } as unknown as ExtensionCommandContext);
+  assert.match(notify.at(-1)!, /Shared test plan/);
+  assert.doesNotMatch(notify.at(-1)!, /foreign@example\.test/);
 
-	const requests: string[] = [];
-	t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
-		assert.ok(url.startsWith(env.ANTIGRAVITY_BASE_URL));
-		assert.equal(new Headers(init.headers).get("Authorization"), "Bearer personal-token");
-		if (url.endsWith(":loadCodeAssist")) return Response.json({});
-		requests.push(url);
-		return Response.json({ groups: [{ buckets: [{ bucketId: "gemini-5h", remainingFraction: 0.5 }] }] });
-	});
-	const ctx = { ui, model: { provider: "antigravity-pool", id: "gemini-test" } } as unknown as ExtensionCommandContext;
-	try {
-		for (const start of events.get("session_start")!) await start({}, ctx);
-		await rendered;
-		assert.equal(requests.length, 1, "a recent foreign entry must not skip the live fetch");
-		await run("refresh antigravity-pool", ctx);
-		assert.equal(requests.length, 2);
-		assert.equal(readFileSync(diskCache, "utf8"), cached);
-	} finally {
-		for (const shutdown of events.get("session_shutdown")!) await shutdown({}, ctx);
-	}
+  const requests: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    assert.ok(url.startsWith(env.ANTIGRAVITY_BASE_URL));
+    assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer personal-token');
+    if (url.endsWith(':loadCodeAssist')) return Response.json({});
+    requests.push(url);
+    return Response.json({ groups: [{ buckets: [{ bucketId: 'gemini-5h', remainingFraction: 0.5 }] }] });
+  });
+  const ctx = { ui, model: { provider: 'antigravity-pool', id: 'gemini-test' } } as unknown as ExtensionCommandContext;
+  try {
+    for (const start of events.get('session_start')!) await start({}, ctx);
+    await rendered;
+    assert.equal(requests.length, 1, 'a recent foreign entry must not skip the live fetch');
+    await run('refresh antigravity-pool', ctx);
+    assert.equal(requests.length, 2);
+    assert.equal(readFileSync(diskCache, 'utf8'), cached);
+  } finally {
+    for (const shutdown of events.get('session_shutdown')!) await shutdown({}, ctx);
+  }
 });
 
 test("detailBar renders theme-free cells and clamps", () => {
@@ -805,9 +840,12 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 	assert.deepEqual(resolveRefreshTargets("zen", usageProviderCfgs)?.map((c) => c.id), [
 		"opencode-go",
 	]);
-	for (const alias of ["google", "antigravity-pool"]) {
-		assert.deepEqual(resolveRefreshTargets(alias, usageProviderCfgs)?.map((c) => c.id), ["antigravity-pool"]);
-	}
+  for (const alias of ['google', 'antigravity-pool']) {
+    assert.deepEqual(
+      resolveRefreshTargets(alias, usageProviderCfgs)?.map((c) => c.id),
+      ['antigravity-pool'],
+    );
+  }
 	assert.deepEqual(resolveRefreshTargets("claude", usageProviderCfgs)?.map((c) => c.id), [
 		"claude-cli",
 	]);
@@ -817,7 +855,7 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 });
 
 test("resolveRefreshTargets returns undefined for unresolvable targets", () => {
-	assert.equal(resolveRefreshTargets("antigravity", usageProviderCfgs), undefined);
+  assert.equal(resolveRefreshTargets('antigravity', usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("bogus", usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("active", usageProviderCfgs), undefined);
 	assert.equal(resolveRefreshTargets("active", usageProviderCfgs, "ollama"), undefined);
