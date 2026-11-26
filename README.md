@@ -18,12 +18,14 @@ The collection currently includes two observability extensions, integrated model
 - **[Numes Pool](#numes-pool)** — rotate local Numes API keys, skip keys rejected with HTTP 401, and respect shared rate limits.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
+- **Fast mode** — `/fast [on|off|toggle]` requests Fast processing for allowlisted OpenAI Responses models, including `xingchiapi/gpt-6.1-sol`, without an external `pi-fast` package.
 - **[Antigravity Pool](#antigravity-pool)** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Claude Code CLI provider** — use your Claude Pro/Max subscription from Pi coding agent via the local authenticated `claude` CLI with MCP tool bridge.
 - **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
 - **Gemini Web provider** — native zero-bridge access to Gemini Web with cookie rotation, slot routing, dynamic model discovery, and prompt-based tool calling.
 - **Ponytail mode** — "lazy senior dev" instructions that steer the agent toward the smallest working change, plus review/audit skills, via [`ponytail`](https://github.com/DietrichGebert/ponytail).
 - **Stella** — `/skill:stella` rewrites ambiguous technical English using ASD-STE100-inspired rules, with a bundled linter for structural checks.
+- **witr** — `/skill:witr` traces local processes and occupied ports to what started them. Requires the [witr CLI](https://github.com/pranshuparmar/witr#2-installation) on `PATH`.
 - **Goal** — `/goal` conversational goal planning with tasks, subtasks, persistent progress, and an independent completion auditor.
 - **Todo** — a persistent `todo` tool, `/todos`, and a live task panel above the editor.
 - **Advisor** — an on-demand second opinion through `ask_advisor` and configurable review gates, on a separate model.
