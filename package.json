@@ -55,6 +55,7 @@
       "./extensions/alpakyros-pool/index.ts",
       "./extensions/numes-pool/index.ts",
       "./extensions/workbuddy-pool/index.ts",
+      "./extensions/fast-mode/index.ts",
       "./extensions/antigravity/index.ts",
       "./extensions/gemini-web/index.ts",
       "./extensions/antigravity/features/google-search.ts",
