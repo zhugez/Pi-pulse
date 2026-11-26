@@ -4,8 +4,8 @@
  * Adds a model-neutral streaming-throughput line to Pi's footer status area,
  * directly below the model/thinking indicator and the subscription-usage line:
  *
- *   ⚡ ~42.1 tok/s        ← during a stream (characters / 4 estimate)
- *   ⚡ 39.8 tok/s         ← once the message settles (reported output tokens)
+ *   󱐋 tps: ~42.1 tok/s        ← during a stream (characters / 4 estimate)
+ *   󱐋 tps: 39.8 tok/s         ← once the message settles (reported output tokens)
  *
  * The footer carries one number only: decode throughput. Live TPS is a
  * `characters / 4` estimate — hence the `~` — because most providers do not
@@ -41,7 +41,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "live-throughput";
-const LABEL = "⚡";
+const LABEL = "\u{f140b}";
 const CHARS_PER_TOKEN = 4;
 const UPDATE_INTERVAL_MS = 200;
 /**
@@ -293,11 +293,12 @@ interface StatusCtx {
 	};
 }
 
-function accent(ui: StatusCtx["ui"], text: string): string {
+function formatStatus(ui: StatusCtx["ui"], text: string): string {
 	try {
-		return ui.theme?.fg("accent", text) ?? text;
+		const fg = (color: string, value: string) => ui.theme?.fg(color, value) ?? value;
+		return `${fg("accent", LABEL)} ${fg("muted", "tps: ")}${fg("text", text)}`;
 	} catch {
-		return text;
+		return `${LABEL} tps: ${text}`;
 	}
 }
 
@@ -333,7 +334,7 @@ export default function registerLiveThroughput(pi: ExtensionAPI): void {
 		try {
 			ctx.ui.setStatus(
 				STATUS_KEY,
-				text === undefined ? undefined : accent(ctx.ui, `${LABEL} ${text}`),
+				text === undefined ? undefined : formatStatus(ctx.ui, text),
 			);
 		} catch {
 			// The session can be replaced between an event and this write.

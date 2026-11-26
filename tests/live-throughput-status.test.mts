@@ -104,10 +104,10 @@ function harness(t: TestContext, options: HarnessOptions = {}) {
 			assert.ok(entry, "throughput command not registered");
 			await entry.handler(args, ctx);
 		},
-		/** Footer text without the emoji label, so assertions stay readable. */
+		/** Footer rate without its styled badge, so assertions stay readable. */
 		text(): string | undefined {
 			const raw = statuses.get(STATUS_KEY);
-			return raw === undefined ? undefined : raw.replace("⚡ ", "");
+			return raw === undefined ? undefined : raw.replace("󱐋 tps: ", "");
 		},
 		lastNotification(): { text: string; level: string | undefined } {
 			const last = notifications.at(-1);
@@ -187,6 +187,7 @@ test("footer shows a live estimate, then the exact rate from usage", async (t) =
 	await sendDelta(h, 400);
 	// 800 chars / 4 = ~200 tokens over a 1.0s window, so the rate is estimated.
 	assert.equal(assertRateOnly(h.text()), "~200.0 tok/s");
+	assert.equal(h.statuses.get(STATUS_KEY), "󱐋 tps: ~200.0 tok/s");
 
 	await endTurn(h, { input: 1_850, output: 842, cacheRead: 0, cacheWrite: 0 });
 	// 841 = 842 output tokens minus the first token that defines the boundary;

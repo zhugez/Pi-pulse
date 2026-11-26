@@ -12,7 +12,7 @@ type CoreLoader = () => Promise<CoreModule[]>;
  */
 export function registerDeferredCores(
   pi: ExtensionAPI,
-  loadCores: CoreLoader = () => Promise.all([import('./subscription-usage.ts'), import('./live-throughput-status.ts')]),
+  loadCores: CoreLoader = () => Promise.all([import('./subscription-usage.ts'), import('./live-throughput-status.ts'), import('./session-footer.ts')]),
 ): Promise<EventHandler[]> {
   const registerEvent = pi.on.bind(pi) as unknown as EventRegistrar;
   const sessionStarts: EventHandler[] = [];

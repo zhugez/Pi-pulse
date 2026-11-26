@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 import test, { type TestContext } from "node:test";
 import { createEventBus, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import registerFastMode from "../extensions/fast-mode/index.ts";
@@ -101,6 +102,7 @@ test("configured codex-lb provider uses its own URL/auth and default refresh sta
 	assert.equal(options?.redirect, "error");
 	assert.match(h.statuses.get("macmini-codex")!, /Pool 5h used:.*9\.3%.*Pool W used:.*9\.5%.*Limit 5h used:.*9\.2%/);
 	assert.match(notify.mock.calls.at(-1)!.arguments[0], /Usage refreshed for macmini-codex/);
+	assert.match(h.statuses.get("macmini-codex")!, /^○ 󰘨 usage: /);
 	assert.equal(h.fetch.mock.callCount(), 0);
 	assert.equal(h.providerFetches.antigravity.mock.callCount(), 0);
 	assert.equal(h.watch.mock.callCount(), 0);
@@ -116,6 +118,48 @@ test("configured codex-lb provider uses its own URL/auth and default refresh sta
 	await h.event("model_select");
 	assert.equal(h.statuses.get("macmini-codex"), undefined);
 	assert.equal(h.fetch.mock.callCount(), 1);
+});
+
+test("xingchi usage ribbon stays readable on resize, preserves stale warnings and follows theme changes", async (t) => {
+ const h = harness(t);
+ h.ctx.model = { provider: "xingchiapi", id: "test" } as typeof h.ctx.model;
+ h.providerFetches.xingchiapi.mock.mockImplementation(async () => ({ windows: {}, balance: { currency: "USD", total: 882.28 }, plan: "xingchiapi · unrestricted · 801 requests today" }));
+ const widgets = new Map<string, Component>();
+ Object.assign(h.ctx.ui, { setWidget(key: string, factory: Parameters<ExtensionContext["ui"]["setWidget"]>[1]) {
+  if (!factory) widgets.delete(key);
+  else if (typeof factory === "function") widgets.set(key, factory({} as never, h.ctx.ui.theme));
+ } });
+ await h.event("session_start");
+ const widget = widgets.get("subscription-usage:xingchiapi")!;
+ assert.ok(widget);
+ assert.equal(h.statuses.get("xingchiapi"), undefined);
+ assert.deepEqual(widget.render(80), ["xingchi  $882.28 balance   801 req today   unrestricted"]);
+ for (let width = 1; width <= 120; width++) {
+  const lines = widget.render(width);
+  assert.ok(lines.every((line) => visibleWidth(line) <= width), `overflow at ${width}`);
+  const text = lines.map(stripVTControlCharacters).join("").replaceAll(" ", "");
+  for (const value of ["xingchi", "$882.28", "balance", "801reqtoday", "unrestricted"]) assert.ok(text.includes(value), value);
+  assert.doesNotMatch(text, /usage:|○/);
+ }
+ h.ctx.ui.theme.fg = (_color: string, text: string) => `\x1b[33m${text}\x1b[39m`;
+ widget.invalidate();
+ assert.ok(widget.render(80).join("").includes("\x1b[1m$882.28\x1b[22m"));
+ h.providerFetches.xingchiapi.mock.mockImplementation(async () => { throw new Error("temporary outage"); });
+ await h.commands.get("usage")!.handler("refresh", h.ctx);
+ const stale = widgets.get("subscription-usage:xingchiapi")!;
+ const warning = stripVTControlCharacters(stale.render(80).join(""));
+ assert.match(warning, /\$882\.28.*801 req today.*⚠/);
+ assert.doesNotMatch(warning, /usage:|○/);
+ h.ctx.ui.theme.fg = (_color: string, text: string) => text;
+ stale.invalidate();
+ assert.ok(!stale.render(80).join("").includes("\x1b"));
+});
+
+test("xingchi usage fallback uses its own provider label without inventing missing usage", async (t) => {
+ const h = harness(t);
+ h.ctx.model = { provider: "xingchiapi", id: "test" } as typeof h.ctx.model;
+ await h.event("session_start");
+ assert.equal(h.statuses.get("xingchiapi"), "xingchi  $42.00 balance");
 });
 
 test("usage widget reflows on resize without losing quota or sharing the throughput line", async (t) => {
@@ -138,6 +182,7 @@ test("usage widget reflows on resize without losing quota or sharing the through
 	await h.event("session_start");
 	assert.ok(widget, "usage should use a width-aware widget, not a truncated footer status");
 	assert.equal(h.statuses.get("openai-codex"), undefined);
+	assert.match(stripVTControlCharacters(widget.render(200).join("\n")), /^○ 󰘨 usage: /);
 	assert.match(widget.render(200).join("\n"), /░/);
 	for (const width of [100, 80, 60, 40, 20, 10, 1]) {
 		const lines = widget.render(width);
@@ -489,7 +534,7 @@ test("manual model check renders inference result across model switches", async 
 	await h.event("session_start");
 	assert.equal(stream.mock.callCount(), 0);
 	await h.commands.get("usage")!.handler("check", h.ctx);
-	assert.match(h.statuses.get("usage-model-health")!, /HMS test ✓/);
+	assert.match(h.statuses.get("usage-model-health")!, /hms\/test ✓/);
 	await h.commands.get("usage")!.handler("", h.ctx);
 	assert.match(notify.mock.calls.at(-1)!.arguments[0], /hms\/test: OK/);
 	succeed = false;
@@ -507,7 +552,7 @@ test("automatic checks poll both providers without a command and survive model s
 	const notify = t.mock.method(h.ctx.ui, "notify");
 	await h.event("session_start");
 	assert.equal(stream.mock.callCount(), 2);
-	assert.match(h.statuses.get("usage-model-health")!, /HMS.*XINGCHI.*one ✓.*two ✓/);
+	assert.match(h.statuses.get("usage-model-health")!, /hms\/one ✓.*xingchi\/two ✓/);
 	assert.equal(notify.mock.callCount(), 0);
 	await h.event("model_select");
 	assert.equal(stream.mock.callCount(), 2);
@@ -538,7 +583,7 @@ test("health widget stays compact, reflows and clears on hide", async (t) => {
 	} as unknown as typeof h.ctx.modelRegistry;
 	await h.event("session_start");
 	assert.ok(widget);
-	assert.equal(widget.render(120).length, 2);
+	assert.equal(widget.render(120).length, 1);
 	assert.doesNotMatch(widget.render(120).join(""), /may use credits|models|ago|Model checks/);
 	for (const width of [40, 10, 1]) assert.ok(widget.render(width).every((line) => visibleWidth(line) <= width));
 	h.ctx.ui.theme.fg = (_color: string, text: string) => `\x1b[32m${text}\x1b[0m`;
@@ -658,31 +703,31 @@ for (const order of ['producer-first', 'dock-first']) test(`telemetry dock owner
   if (order === 'dock-first') await h.event('session_start');
   await events.get('session_start')!({}, ctx);
   if (order === 'producer-first') {
-    assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast off');
+    assert.equal(h.statuses.get('pi-pulse-fast'), '○ 󱐋 fast');
     await h.event('session_start');
   }
   await h.event('session_start');
   assert.equal(h.statuses.get('pi-pulse-fast'), undefined);
-  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*Off ○/);
+  assert.match(widgets.get('usage-model-health')!.join(''), /fast ○/);
   bus.emit('pi-pulse:telemetry:v1', { kind: 'compact', scope: ':xingchiapi/gpt-6.1-sol', data: { tokens: 146_076, limit: 300_000, contextWindow: 1_000_000 } });
-  assert.match(widgets.get('usage-model-health')!.join(''), /COMPACT @30%.*~153\.9k left/);
+  assert.match(widgets.get('usage-model-health')!.join(''), /compact.*in 153\.9k.*[(]30%[)]/);
   await commands.get('fast')!.handler('on', ctx);
-  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*On ✓/);
+  assert.match(widgets.get('usage-model-health')!.join(''), /fast ●/);
   assert.equal(h.statuses.get('pi-pulse-fast'), undefined);
   await h.commands.get('usage')!.handler('toggle off', h.ctx);
   assert.equal(widgets.has('usage-model-health'), false);
-  assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast on');
+  assert.equal(h.statuses.get('pi-pulse-fast'), '● 󱐋 fast');
   await h.commands.get('usage')!.handler('toggle bars', h.ctx);
-  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*On ✓/);
+  assert.match(widgets.get('usage-model-health')!.join(''), /fast ●/);
   h.ctx.model = { ...h.ctx.model!, provider: 'other' } as typeof h.ctx.model;
   await h.event('model_select');
   assert.equal(widgets.has('usage-model-health'), false);
   await events.get('model_select')!({}, { ...ctx, model: h.ctx.model });
-  assert.ok(widgets.get('usage-model-health')!.join('').includes('N/A —'));
-  assert.doesNotMatch(widgets.get('usage-model-health')!.join(''), /COMPACT/);
+  assert.ok(widgets.get('usage-model-health')!.join('').includes('fast —'));
+  assert.doesNotMatch(widgets.get('usage-model-health')!.join(''), /compact/);
   await h.event('session_shutdown');
   assert.equal(widgets.has('usage-model-health'), false);
-  assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast n/a');
+  assert.equal(h.statuses.get('pi-pulse-fast'), '— 󱐋 fast');
   await events.get('session_shutdown')!({}, ctx);
   bus.emit('pi-pulse:telemetry-request:v1', {});
   assert.equal(widgets.has('usage-model-health'), false);
@@ -724,33 +769,34 @@ test('health and telemetry share one dock through updates, clearing, model chang
   await h.event('session_start');
   publish('compact', { tokens: 146_076, limit: 300_000, contextWindow: 1_000_000 });
   publish('fast', 'off');
-  assert.match(render(), /HMS.*XINGCHI.*COMPACT @30%.*FAST/);
-  assert.match(render(), /Flash ○.*Sol ○.*~153[.]9k left.*Off ○/);
+  assert.match(render(), /hms\/.*xingchi\/.*compact.*fast/s);
+  assert.match(render(), /[(]30%[)]/);
+  assert.match(render(), /Flash ○.*Sol ○.*in 153[.]9k.*fast ○/s);
   assert.equal(widgets.has('usage-telemetry'), false);
   const reply = { stopReason: 'stop', content: [{ type: 'text', text: 'OK' }] };
   pending.get(flash.id)!(reply);
   await flush();
-  assert.match(render(), /Flash ✓.*~153[.]9k left.*Off ○/);
+  assert.match(render(), /Flash ✓.*in 153[.]9k.*fast ○/s);
   publish('compact', { tokens: 200_000, limit: 300_000, contextWindow: 1_000_000 });
   publish('fast', 'on');
-  assert.match(render(), /Flash ✓.*~100k left.*On ✓/);
+  assert.match(render(), /Flash ✓.*in 100k.*fast ●/s);
   pending.get(sol.id)!(reply);
   await flush();
   models = [];
   t.mock.timers.tick(60_000);
   await flush();
   publish('fast', 'on');
-  assert.doesNotMatch(render(), /HMS|XINGCHI/);
-  assert.match(render(), /COMPACT @30%.*FAST/);
-  assert.match(render(), /~100k left.*On ✓/);
+  assert.doesNotMatch(render(), /hms\/|xingchi\//);
+  assert.match(render(), /compact.*fast/);
+  assert.match(render(), /in 100k.*fast ●/);
   models = [flash, sol];
   await h.event('agent_settled');
-  assert.match(render(), /Flash ○.*Sol ○.*~100k left.*On ✓/);
+  assert.match(render(), /Flash ○.*Sol ○.*in 100k.*fast ●/s);
   h.ctx.model = { provider: 'other', id: 'test' } as typeof h.ctx.model;
   await h.event('model_select');
   publish('fast', 'n/a', ':other/test');
-  assert.doesNotMatch(render(), /COMPACT/);
-  assert.match(render(), /N\/A —/);
+  assert.doesNotMatch(render(), /compact/);
+  assert.match(render(), /fast —/);
   await h.event('session_shutdown');
   for (const finish of pending.values()) finish(reply);
   await flush();

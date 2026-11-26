@@ -46,7 +46,8 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 		pi.events?.emit("pi-pulse:telemetry:v1", { kind: "fast", scope, data: state });
 		if (dockAvailable) { ctx.ui.setStatus(STATUS_KEY, undefined); return; }
 		const { theme } = ctx.ui;
-		ctx.ui.setStatus(STATUS_KEY, `${theme.fg("muted", "Fast")} ${theme.fg(state === "on" ? "success" : "dim", state)}`);
+		const indicator = theme.fg(state === "on" ? "success" : "dim", state === "on" ? "●" : state === "off" ? "○" : "—");
+		ctx.ui.setStatus(STATUS_KEY, `${indicator} ${theme.fg("accent", "\u{f140b}")} ${theme.fg("muted", "fast")}`);
 	}
 
 	function notify(

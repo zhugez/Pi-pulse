@@ -396,6 +396,13 @@ function isColorTheme(theme?: { fg(color: string, text: string): string }): bool
 	return Boolean(theme && theme.fg("accent", "x") !== "x");
 }
 
+/** Match the DejaVu/Ponytail badge grammar across the dock. */
+function dockLabel(theme: { fg(color: string, text: string): string }, icon: string, name: string, enabled = false): string {
+	const colored = isColorTheme(theme);
+	const paint = (color: CtpColor, fallback: string, text: string) => colored ? ctp(color, text) : theme.fg(fallback, text);
+	return `${paint(enabled ? "green" : "overlay1", enabled ? "success" : "dim", enabled ? "●" : "○")} ${paint("mauve", "accent", icon)} ${paint("subtext0", "muted", `${name}:`)}`;
+}
+
 function ctpBandColor(safePercent: number): CtpColor {
 	if (safePercent > 85) return "red";
 	if (safePercent > 70) return "peach";
@@ -1474,10 +1481,19 @@ export const xingchiapiCfg: ProviderCfg = {
 		};
 	},
 	render(data, theme) {
-		return joinParts([
-			theme.fg("dim", data.plan ?? "xingchiapi"),
-			data.balance ? formatBalance(data.balance) : undefined,
-		].filter((value): value is string => Boolean(value)), theme);
+		const colored = isColorTheme(theme);
+		const vivid = colored && (!("appearance" in theme) || theme.appearance !== "light");
+		const paint = (color: CtpColor, fallback: string, text: string) => vivid ? ctp(color, text) : theme.fg(fallback, text);
+		const plan = data.plan?.split(" · ") ?? [];
+		const requests = plan.find((part) => /^\d+ requests today$/.test(part));
+		const balance = data.balance;
+		const amount = balance ? formatBalance(balance) : undefined;
+		const values = [
+			balance && amount && `${paint(balance.total < 0 ? "red" : "green", balance.total < 0 ? "error" : "success", colored ? `\x1b[1m${amount}\x1b[22m` : amount)} ${theme.fg("muted", "balance")}`,
+			requests && `${paint("lavender", "accent", requests.replace(" requests today", ""))} ${theme.fg("muted", "req today")}`,
+			...plan.filter((part) => part !== "xingchiapi" && part !== requests).map((part) => theme.fg("muted", part)),
+		].filter(Boolean);
+		return paint("mauve", "accent", "xingchi") + (values.length ? `  ${values.join("   ")}` : "");
 	},
 };
 
@@ -2177,7 +2193,7 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 
 type ModelHealth = { ok?: boolean; elapsed?: number; checkedAt?: number };
 
-/** Shared two-row dock. Full diagnostics and polling details remain in /usage. */
+/** Health and session rows share a quiet label gutter. Details remain in /usage. */
 export function renderModelHealth(
 	health: ReadonlyMap<string, ModelHealth>,
 	theme: { fg(color: string, text: string): string },
@@ -2190,81 +2206,53 @@ export function renderModelHealth(
 		"xingchiapi/gpt-6.1-sol": "Sol",
 		"xingchiapi/gpt-6-astra": "Astra",
 	};
-	const colored = isColorTheme(theme);
-	const paint = (color: CtpColor, fallback: string, text: string) => colored ? ctp(color, text) : theme.fg(fallback, text);
+	const vivid = isColorTheme(theme) && (!("appearance" in theme) || theme.appearance !== "light");
+	const paint = (color: CtpColor, fallback: string, text: string) => vivid ? ctp(color, text) : theme.fg(fallback, text);
 	const clean = (value: string) => value.replace(/\p{Cc}/gu, " ");
 	const entries = [...health].map(([key, result]) => {
 		const slash = key.indexOf("/");
 		return { provider: clean(key.slice(0, slash)), id: clean(key.slice(slash + 1)), label: aliases[key] ?? clean(key.slice(slash + 1)), result };
 	});
-	const groups = new Map<string, string[]>();
-	for (const entry of entries) {
+	const items = entries.map((entry) => {
 		const { provider, id, result } = entry;
 		const label = entries.some((other) => other !== entry && other.provider === provider && other.label === entry.label) ? id : entry.label;
 		const state = result.ok === undefined ? "○" : result.ok ? "✓" : "!";
 		const color = result.ok === undefined ? "muted" : result.ok ? "success" : "warning";
-		const statusColor: CtpColor = result.ok === undefined ? "overlay1" : result.ok ? "green" : "peach";
 		const timing = result.ok === true && result.elapsed !== undefined
-			? paint("subtext0", "dim", ` ${result.elapsed < 100 ? `${result.elapsed}ms` : `${(result.elapsed / 1000).toFixed(1)}s`}`) : "";
-		const nameColor: CtpColor = result.ok === false ? "peach" : provider === "hms" ? "sky" : "lavender";
-		const item = `${paint(nameColor, "accent", label)} ${paint(statusColor, color, state)}${timing}`;
-		const items = groups.get(provider) ?? [];
-		items.push(item);
-		groups.set(provider, items);
-	}
-	const blocks = [...groups].map(([provider, items]) => {
-		const heading = paint(provider === "hms" ? "sapphire" : "mauve", "accent", provider === "hms" ? "HMS" : provider === "xingchiapi" ? "XINGCHI" : provider);
-		const body = items.join("   ");
-		return { heading, body, items, width: Math.max(visibleWidth(heading), visibleWidth(body)) };
+			? theme.fg("muted", " " + (result.elapsed < 100 ? result.elapsed + "ms" : (result.elapsed / 1000).toFixed(1) + "s")) : "";
+		return theme.fg("muted", (provider === "xingchiapi" ? "xingchi" : provider) + "/") + paint(result.ok === false ? "peach" : provider === "hms" ? "sky" : provider === "xingchiapi" ? "lavender" : "text", result.ok === false ? "warning" : "accent", label) + " " + theme.fg(color, state) + timing;
 	});
-	const extras: [string, string][] = [];
+	const sections: [string, string[]][] = items.length ? [["health", items]] : [];
+	const session: string[] = [];
 	if (telemetry.compact) {
 		const { tokens, limit, contextWindow } = telemetry.compact;
 		const threshold = Number((limit / contextWindow * 100).toFixed(1));
 		const remaining = tokens === null ? "usage pending ○" : tokens > limit ? "Ready !"
-			: `~${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(limit - tokens + 1).replace("K", "k")} left`;
+			: "in " + new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(limit - tokens + 1).replace("K", "k");
 		const near = tokens !== null && tokens >= limit * 0.9;
-		extras.push([`COMPACT @${threshold}%`, paint(near ? "peach" : "subtext0", near ? "warning" : "muted", remaining)]);
+		session.push(paint("teal", "accent", "compact ") + paint(near ? "peach" : "teal", near ? "warning" : "accent", remaining) + theme.fg("muted", " (" + threshold + "%)"));
 	}
 	if (telemetry.fast) {
 		const enabled = telemetry.fast === "on";
-		const label = enabled ? "On" : telemetry.fast === "off" ? "Off" : "N/A";
-		const state = enabled ? "✓" : telemetry.fast === "off" ? "○" : "—";
-		extras.push(["FAST", `${paint(enabled ? "lavender" : "subtext0", enabled ? "accent" : "muted", label)} ${paint(enabled ? "green" : "overlay1", enabled ? "success" : "dim", state)}`]);
+		session.push(theme.fg("muted", "fast ") + theme.fg(enabled ? "success" : "muted", enabled ? "●" : telemetry.fast === "off" ? "○" : "—"));
 	}
-	for (const [title, body] of extras) {
-		const heading = paint("mauve", "accent", title);
-		blocks.push({ heading, body, items: [body], width: Math.max(visibleWidth(heading), visibleWidth(body)) });
-	}
+	if (session.length) sections.push(["session", session]);
 	const rows: string[] = [];
-	let columns: typeof blocks = [];
-	let used = 0;
-	const flush = () => {
-		if (!columns.length) return;
-		for (const row of ["heading", "body"]) rows.push(columns.map((block, index) => {
-			const text = row === "heading" ? block.heading : block.body;
-			return text + (index < columns.length - 1 ? " ".repeat(block.width - visibleWidth(text) + 6) : "");
-		}).join(""));
-		columns = [];
-		used = 0;
-	};
-	for (const block of blocks) {
-		if (block.width <= width) {
-			if (used + (columns.length ? 6 : 0) + block.width > width) flush();
-			used += (columns.length ? 6 : 0) + block.width;
-			columns.push(block);
-			continue;
-		}
-		flush();
-		rows.push(...wrapTextWithAnsi(block.heading, width));
-		let line = "";
-		for (const item of block.items) {
-			if (line && visibleWidth(`${line}   ${item}`) > width) { rows.push(...wrapTextWithAnsi(line, width)); line = ""; }
-			line = line ? `${line}   ${item}` : item;
+	for (const [label, values] of sections) {
+		let line = paint(label === "health" ? "sapphire" : "teal", "accent", label.padEnd(7)) + "  ";
+		let populated = false;
+		for (const value of values) {
+			const joined = line + (populated ? "   " : "") + value;
+			if (visibleWidth(joined) <= width) { line = joined; populated = true; continue; }
+			if (populated) rows.push(line);
+			const indent = visibleWidth(value) + 9 <= width ? "         " : "";
+			const wrapped = wrapTextWithAnsi(populated ? indent + value : joined, width);
+			rows.push(...wrapped.slice(0, -1));
+			line = wrapped.at(-1) ?? "";
+			populated = true;
 		}
 		if (line) rows.push(...wrapTextWithAnsi(line, width));
 	}
-	flush();
 	return rows;
 }
 
@@ -2491,7 +2479,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			// Older/headless UI adapters may expose only setStatus.
 			if (!ui.setWidget) {
-				ui.setStatus(providerId, text);
+				ui.setStatus(providerId, text === undefined ? undefined : providerId === "xingchiapi" ? text : `${dockLabel(ui.theme, "\u{f0628}", "usage")} ${text}`);
 				return;
 			}
 			ui.setStatus(providerId, undefined);
@@ -2508,19 +2496,20 @@ export default function (pi: ExtensionAPI) {
 					if (model?.provider !== providerId) return [];
 					const cfg = cfgs.find((c) => c.id === providerId);
 					const state = cache.get(providerId);
-					if (!cfg || !state?.lastData) return wrapTextWithAnsi(text, width);
+					const label = providerId === "xingchiapi" ? "" : `${dockLabel(theme, "\u{f0628}", "usage")} `;
+					if (!cfg || !state?.lastData) return wrapTextWithAnsi(`${label}${text}`, width);
 					const data = state.lastData;
 					const render = (style: UsageStyle) => {
 						const value = cfg.id === "codex-pool" ? renderCodexPoolFooter(data, theme, selectedPoolAccount, style) : cfg.render(data, theme, model.id, style);
 						return state.failStreak > 0 ? theme.fg("warning", `${value} ⚠`) : value;
 					};
-					const full = render(mode);
+					const full = `${label}${render(mode)}`;
 					if (visibleWidth(full) <= width) return [full];
 					let compact = render("percent");
 					if (data.plan === "codex-lb") {
 						compact = `Used: ${compact.replace(/ used(?= )/g, "")}`;
 					}
-					return wrapTextWithAnsi(compact, width);
+					return wrapTextWithAnsi(`${label}${compact}`, width);
 				},
 			}), { placement: "belowEditor" });
 		} catch {
