@@ -4,10 +4,10 @@ import { isFastModeEnabledByDefault } from "./config.ts";
 import { applyFastMode, supportsFastMode } from "./fast-mode.ts";
 
 const STATUS_KEY = "pi-pulse-fast";
-const STATUS_ICONS = {
-	on: "\u{f0241}",
-	off: "\u{f06d5}",
-	unavailable: "\u{f0243}",
+const STATUS_LABELS = {
+	on: "Fast: ON",
+	off: "Fast: OFF",
+	unavailable: "Fast: unavailable",
 } as const;
 
 type Toggle = "on" | "off" | "toggle";
@@ -30,12 +30,12 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 	function updateStatus(ctx: ExtensionContext): void {
 		if (ctx.mode !== "tui") return;
 		const supported = supportsFastMode(ctx.model);
-		const icon = !supported
-			? STATUS_ICONS.unavailable
+		const label = !supported
+			? STATUS_LABELS.unavailable
 			: enabled
-				? STATUS_ICONS.on
-				: STATUS_ICONS.off;
-		ctx.ui.setStatus(STATUS_KEY, icon);
+				? STATUS_LABELS.on
+				: STATUS_LABELS.off;
+		ctx.ui.setStatus(STATUS_KEY, label);
 	}
 
 	function notify(
@@ -96,6 +96,10 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 
 	pi.on("model_select", async (_event, ctx) => {
 		updateStatus(ctx);
+	});
+
+	pi.on("session_shutdown", (_event, ctx) => {
+		if (ctx.mode === "tui") ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }
 
