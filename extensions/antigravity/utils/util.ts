@@ -47,10 +47,6 @@ export function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function nowRequestId(): string {
-  return antigravityRequestEnvelope("unknown", false).requestId;
-}
-
 /** Deterministic RFC 4122 v5 UUID from seed (survives restarts for the same session seed). */
 export function stableUuid(seed: string): string {
   const bytes = createHash("sha1").update(seed).digest().subarray(0, 16);
@@ -151,10 +147,6 @@ export function resolveSessionTrajectory(
     }
   }
   return entry;
-}
-
-export function clearSessionTrajectoryMap(): void {
-  sessionTrajectoryMap.clear();
 }
 
 /**
