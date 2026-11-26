@@ -17,6 +17,7 @@ The collection currently includes two observability extensions, integrated model
 - **Codex Pool** — native multi-account pooling for OpenAI Codex (ChatGPT Plus/Pro), session stickiness, bounded failover, and private 0600 persistence.
 - **Subscription usage** — provider quota, reset countdowns, and DeepSeek balance/peak pricing.
 - **Live throughput** — streaming decode speed, final token rate, TTFT, and input/cache details.
+- **Fast mode** — `/fast [on|off|toggle]` requests Fast processing for allowlisted OpenAI Responses models, including `xingchiapi/gpt-6.1-sol`, without an external `pi-fast` package.
 - **Antigravity provider** — Google OAuth, Gemini/Claude/GPT-OSS model routing, quota diagnostics, linked-account failover, and image generation.
 - **Claude Code CLI provider** — use your Claude Pro/Max subscription from Pi coding agent via the local authenticated `claude` CLI with MCP tool bridge.
 - **ExoMind Second Brain** — persistent long-term memory runtime with hybrid graph recall, typed relations, and auto-capture across sessions.
