@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { defaultProjectId } from "../client/client.js";
+import { PROVIDER_ID } from "../models/models.js";
 import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
 import { refreshAntigravityToken } from "./oauth.js";
 
@@ -200,7 +201,7 @@ function readAuthFile(): Record<string, unknown> {
 function writeActiveCredential(account: StoredAccount | undefined): void {
   const auth = readAuthFile();
   if (account) {
-    auth.antigravity = {
+    auth[PROVIDER_ID] = {
       type: "oauth",
       email: account.email,
       access: account.access,
@@ -209,13 +210,13 @@ function writeActiveCredential(account: StoredAccount | undefined): void {
       projectId: account.projectId,
     };
   } else {
-    delete auth.antigravity;
+    delete auth[PROVIDER_ID];
   }
   writePrivateJson(authPath(), auth);
 }
 
 function currentAuthCredentials(): AntigravityOAuthCredentials | undefined {
-  const current = readJsonObject(authPath())?.antigravity;
+  const current = readJsonObject(authPath())?.[PROVIDER_ID];
   if (!current || typeof current !== "object") return undefined;
   const record = current as Record<string, unknown>;
   if (typeof record.refresh !== "string" || !record.refresh) return undefined;

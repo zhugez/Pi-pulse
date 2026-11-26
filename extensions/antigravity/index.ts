@@ -28,6 +28,7 @@ import { executeAntigravitySearch, parseSearchCommandArgs } from "./search/searc
 import {
   applyAntigravityCatalog,
   getCurrentAntigravityCatalog,
+  LEGACY_PROVIDER_ID,
   PROVIDER_ID,
   PROVIDER_NAME,
 } from "./models/models.js";
@@ -88,7 +89,7 @@ async function withUsage(
     if (!apiKey) {
       emitCommandOutput(
         ctx,
-        "No Antigravity credentials. Run /login antigravity first.",
+        `No Antigravity credentials. Run /login ${PROVIDER_ID} first.`,
         "warning",
       );
       return;
@@ -147,7 +148,7 @@ export default function (pi: ExtensionAPI): void {
     const storePath = join(agentDir(), "models-store.json");
     if (existsSync(storePath)) {
       const store = JSON.parse(readFileSync(storePath, "utf8"));
-      hydrateAntigravityCatalog(store.antigravity);
+      hydrateAntigravityCatalog(store[PROVIDER_ID] ?? store[LEGACY_PROVIDER_ID]);
     }
   } catch {}
 
@@ -263,7 +264,7 @@ export default function (pi: ExtensionAPI): void {
         if (accounts.length === 0) {
           emitCommandOutput(
             ctx,
-            "No linked Antigravity accounts. Run /login antigravity to add one.",
+            `No linked Antigravity accounts. Run /login ${PROVIDER_ID} to add one.`,
             "warning",
           );
           return;
@@ -291,7 +292,7 @@ export default function (pi: ExtensionAPI): void {
       if (!apiKey) {
         emitCommandOutput(
           ctx,
-          "No Antigravity credentials. Run /login antigravity first.",
+          `No Antigravity credentials. Run /login ${PROVIDER_ID} first.`,
           "warning",
         );
         return;
@@ -366,7 +367,7 @@ export default function (pi: ExtensionAPI): void {
         if (!apiKey) {
           emitCommandOutput(
             ctx,
-            "No Antigravity credentials. Run /login antigravity first.",
+            `No Antigravity credentials. Run /login ${PROVIDER_ID} first.`,
             "warning",
           );
           return;
@@ -406,7 +407,7 @@ export default function (pi: ExtensionAPI): void {
         if (!apiKey) {
           emitCommandOutput(
             ctx,
-            "No Antigravity credentials. Run /login antigravity first.",
+            `No Antigravity credentials. Run /login ${PROVIDER_ID} first.`,
             "warning",
           );
           return;

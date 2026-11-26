@@ -22,7 +22,7 @@ test("account switch refreshes the model registry using the newly active credent
   }));
   const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
   registerAntigravity({
-    registerProvider() {},
+    registerProvider(id: string) { assert.equal(id, "antigravity-pool"); },
     registerCommand(name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) { commands.set(name, command); },
   } as unknown as ExtensionAPI);
   let refreshed = false;
@@ -33,9 +33,10 @@ test("account switch refreshes the model registry using the newly active credent
     modelRegistry: {
       refresh: async (options: { force?: boolean; providers?: string[] }) => {
         assert.equal(options.force, true);
-        assert.deepEqual(options.providers, ["antigravity"]);
+        assert.deepEqual(options.providers, ["antigravity-pool"]);
         const auth = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
-        assert.equal(auth.antigravity.access, "ultra-token");
+        assert.equal(auth["antigravity-pool"].access, "ultra-token");
+        assert.equal(auth.antigravity, undefined);
         refreshed = true;
         return { errors: new Map() };
       },

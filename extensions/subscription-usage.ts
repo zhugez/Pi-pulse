@@ -49,6 +49,7 @@ import { createUsageCache } from "./subscription-usage/cache.ts";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import { CLIENT_ID, CLIENT_SECRET, TOKEN_URL } from "./antigravity/auth/oauth.ts";
 import { ENDPOINT_FALLBACKS } from "./antigravity/client/client.ts";
+import { LEGACY_PROVIDER_ID, PROVIDER_ID as ANTIGRAVITY_POOL_ID } from "./antigravity/models/models.ts";
 import {
 	asRecord,
 	finiteNumber,
@@ -1103,7 +1104,7 @@ async function usageHttpError(res: Response, provider: string, secrets: string[]
 		// HTML gateways, empty bodies, and unreadable responses still have a status.
 	}
 	const hint = res.status === 401 || res.status === 403 || /invalid_grant/.test(detail)
-		? provider === "openai-codex" || provider === "antigravity"
+		? provider === "openai-codex" || provider === ANTIGRAVITY_POOL_ID || provider === LEGACY_PROVIDER_ID
 			? `; use /login for ${provider} or replace the environment token${res.status === 403 ? "; check account permissions/license if it persists" : ""}`
 			: "; check API key credentials and account permissions"
 		: "";
@@ -1734,7 +1735,7 @@ async function refreshAntigravityToken(
 
 /** Antigravity (Google Cloud Code Assist): 5h & weekly pools for Gemini and Claude/GPT models. */
 export const antigravityCfg: ProviderCfg = {
-	id: "antigravity",
+	id: ANTIGRAVITY_POOL_ID,
 	async fetchUsage(signal?: AbortSignal) {
 		let refreshToken: string | undefined;
 		const endpoints = antigravityEndpointCandidates();
@@ -1902,7 +1903,7 @@ export const antigravityCfg: ProviderCfg = {
 		let expires = 0;
 
 		if (!access) {
-			const cred = readStoredCredential("antigravity");
+			const cred = readStoredCredential(ANTIGRAVITY_POOL_ID);
 			if (cred && cred.type === "oauth") {
 				access = cred.access;
 				refreshToken = cred.refresh;
@@ -2094,8 +2095,8 @@ const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
 	zen: "opencode-go",
 	codex: "openai-codex",
 	openai: "openai-codex",
-	antigravity: "antigravity",
-	google: "antigravity",
+	[LEGACY_PROVIDER_ID]: ANTIGRAVITY_POOL_ID,
+	google: ANTIGRAVITY_POOL_ID,
 	claude: "claude-cli",
 	"claude-cli": "claude-cli",
 	deepseek: "deepseek",

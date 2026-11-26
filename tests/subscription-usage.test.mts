@@ -679,9 +679,9 @@ test("resolveRefreshTargets defaults to active and requires explicit all", () =>
 	assert.deepEqual(resolveRefreshTargets("zen", usageProviderCfgs)?.map((c) => c.id), [
 		"opencode-go",
 	]);
-	assert.deepEqual(resolveRefreshTargets("google", usageProviderCfgs)?.map((c) => c.id), [
-		"antigravity",
-	]);
+	for (const alias of ["google", "antigravity", "antigravity-pool"]) {
+		assert.deepEqual(resolveRefreshTargets(alias, usageProviderCfgs)?.map((c) => c.id), ["antigravity-pool"]);
+	}
 	assert.deepEqual(resolveRefreshTargets("claude", usageProviderCfgs)?.map((c) => c.id), [
 		"claude-cli",
 	]);

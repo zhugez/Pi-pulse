@@ -20,6 +20,7 @@ import {
   ANTIGRAVITY_ROUTING,
   applyAntigravityCatalog,
   getCurrentAntigravityCatalog,
+  PROVIDER_ID,
   registerDiscoveredModelEnums,
   restoreDynamicModelEnums,
   snapshotDynamicModelEnums,
@@ -189,7 +190,7 @@ function toStoredModels(models: ProviderModelConfig[]): Model<Api>[] {
   return models.map((model) => ({
     ...model,
     api: ANTIGRAVITY_API,
-    provider: "antigravity",
+    provider: PROVIDER_ID,
     baseUrl: DEFAULT_ENDPOINT,
   }));
 }

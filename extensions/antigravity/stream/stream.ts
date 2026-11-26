@@ -53,6 +53,7 @@ import {
   getAntigravityRequestModelId,
   getFallbackRuntimeModel,
   getThinkingConfig,
+  LEGACY_PROVIDER_ID,
   PROVIDER_ID,
 } from "../models/models.js";
 import { extractValidationUrl, redactSecrets, safeError } from "../utils/security.js";
@@ -331,7 +332,7 @@ export function convertMessages(
         continue;
       }
       const parts: GeminiPart[] = [];
-      const isSameModel = msg.provider === PROVIDER_ID && msg.model === model.id;
+      const isSameModel = (msg.provider === PROVIDER_ID || msg.provider === LEGACY_PROVIDER_ID) && msg.model === model.id;
       const toolCalls = msg.content.filter((b): b is ToolCall => b.type === "toolCall");
       const firstCallHasSig =
         toolCalls.length > 0 && isValidThoughtSignature(toolCalls[0]?.thoughtSignature);
@@ -1019,7 +1020,7 @@ export function friendlyAntigravityError(status: number | undefined, text: strin
       return "Antigravity rejected an invalid function-call message boundary. Next: update the extension or start a new session, then retry; re-login is not required.";
     }
     if (/API key not valid|API_KEY_INVALID/i.test(msg)) {
-      return "Antigravity login expired or credentials are invalid. Next: run /login antigravity, then retry.";
+      return `Antigravity login expired or credentials are invalid. Next: run /login ${PROVIDER_ID}, then retry.`;
     }
     if (/Invalid JSON payload|Unknown name/i.test(msg)) {
       return `Antigravity request format was rejected by the backend (${msg}). Next: switch to a simpler model or retry after updating the extension.`;
@@ -1027,10 +1028,10 @@ export function friendlyAntigravityError(status: number | undefined, text: strin
     if (/Request contains an invalid argument/i.test(msg)) {
       return `Antigravity rejected this request (${msg}). Next: retry once; if it keeps failing, switch models or re-login.`;
     }
-    return `Bad request from Antigravity. Next: retry once, then run /login antigravity if it keeps failing. Backend said: ${msg}`;
+    return `Bad request from Antigravity. Next: retry once, then run /login ${PROVIDER_ID} if it keeps failing. Backend said: ${msg}`;
   }
   if (status === 401) {
-    return "Antigravity authentication failed. Next: run /login antigravity, then retry.";
+    return `Antigravity authentication failed. Next: run /login ${PROVIDER_ID}, then retry.`;
   }
   if (status === 403) {
     const verifyUrl = extractValidationUrl(text);

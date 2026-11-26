@@ -11,6 +11,7 @@ import {
   generateAntigravityImage,
   IMAGE_ASPECT_RATIOS,
 } from "../image/image.js";
+import { PROVIDER_ID } from "../models/models.js";
 import { isExtraToolEnabled } from "../utils/util.js";
 
 export default function (pi: ExtensionAPI): void {
@@ -39,9 +40,9 @@ export default function (pi: ExtensionAPI): void {
       ),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const apiKey = await ctx.modelRegistry.getApiKeyForProvider("antigravity");
+      const apiKey = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_ID);
       if (!apiKey) {
-        throw new Error("No Antigravity credentials. Run /login antigravity first.");
+        throw new Error(`No Antigravity credentials. Run /login ${PROVIDER_ID} first.`);
       }
       onUpdate?.({ content: [{ type: "text", text: "Generating image…" }], details: {} });
       const result = await generateAntigravityImage({
