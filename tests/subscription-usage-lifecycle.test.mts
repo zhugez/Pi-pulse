@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test, { type TestContext } from "node:test";
-import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionAPI, type ExtensionContext, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import registerFastMode from "../extensions/fast-mode/index.ts";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import subscriptionUsage, {
 	antigravityCfg,
@@ -22,7 +23,7 @@ async function flush() {
 	for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
-function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = []) {
+function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = [], bus?: ExtensionAPI["events"]) {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_800_000_000_000 });
 	t.mock.method(Math, "random", () => 0.5);
 	t.mock.method(console, "error", () => {});
@@ -64,6 +65,7 @@ function harness(t: TestContext, mode = "bars", codexLbProviders: string[] = [])
 		},
 	} as unknown as ExtensionCommandContext;
 	subscriptionUsage({
+		events: bus,
 		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => events.set(name, handler),
 		registerCommand: (name: string, command: { handler(args: string, ctx: ExtensionCommandContext): Promise<void> }) => commands.set(name, command),
 	} as unknown as ExtensionAPI);
@@ -634,4 +636,123 @@ test("concurrent model selections coalesce in-flight fetch without duplicate HTT
 	finish({ windows: { "5h": 25 } });
 	await flush();
 	assert.match(h.statuses.get("openai-codex")!, /25%/);
+});
+
+for (const order of ['producer-first', 'dock-first']) test(`telemetry dock ownership and lifecycle (${order})`, async (t) => {
+  const bus = createEventBus();
+  const h = harness(t, 'bars', [], bus);
+  h.ctx.model = { provider: 'xingchiapi', id: 'gpt-6.1-sol', api: 'openai-responses' } as typeof h.ctx.model;
+  h.ctx.modelRegistry = { getAll: () => [] } as unknown as typeof h.ctx.modelRegistry;
+  const widgets = new Map<string, readonly string[]>();
+  Object.assign(h.ctx.ui, { setWidget(key: string, factory: Parameters<ExtensionContext['ui']['setWidget']>[1]) {
+    if (!factory) { widgets.delete(key); return; }
+    if (typeof factory !== 'function') return;
+    widgets.set(key, factory({ requestRender() {} } as never, h.ctx.ui.theme as never).render(80));
+  } });
+  const events = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+  const commands = new Map<string, { handler(args: string, ctx: ExtensionCommandContext): Promise<void> }>();
+  registerFastMode({ events: bus, on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => events.set(name, handler),
+    registerShortcut() {}, registerCommand: (name: string, command: { handler(args: string, ctx: ExtensionCommandContext): Promise<void> }) => commands.set(name, command),
+  } as unknown as ExtensionAPI);
+  const ctx = { ...h.ctx, mode: 'tui', hasUI: true } as ExtensionCommandContext;
+  if (order === 'dock-first') await h.event('session_start');
+  await events.get('session_start')!({}, ctx);
+  if (order === 'producer-first') {
+    assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast off');
+    await h.event('session_start');
+  }
+  await h.event('session_start');
+  assert.equal(h.statuses.get('pi-pulse-fast'), undefined);
+  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*Off ○/);
+  bus.emit('pi-pulse:telemetry:v1', { kind: 'compact', scope: ':xingchiapi/gpt-6.1-sol', data: { tokens: 146_076, limit: 300_000, contextWindow: 1_000_000 } });
+  assert.match(widgets.get('usage-model-health')!.join(''), /COMPACT @30%.*~153\.9k left/);
+  await commands.get('fast')!.handler('on', ctx);
+  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*On ✓/);
+  assert.equal(h.statuses.get('pi-pulse-fast'), undefined);
+  await h.commands.get('usage')!.handler('toggle off', h.ctx);
+  assert.equal(widgets.has('usage-model-health'), false);
+  assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast on');
+  await h.commands.get('usage')!.handler('toggle bars', h.ctx);
+  assert.match(widgets.get('usage-model-health')!.join(''), /FAST.*On ✓/);
+  h.ctx.model = { ...h.ctx.model!, provider: 'other' } as typeof h.ctx.model;
+  await h.event('model_select');
+  assert.equal(widgets.has('usage-model-health'), false);
+  await events.get('model_select')!({}, { ...ctx, model: h.ctx.model });
+  assert.ok(widgets.get('usage-model-health')!.join('').includes('N/A —'));
+  assert.doesNotMatch(widgets.get('usage-model-health')!.join(''), /COMPACT/);
+  await h.event('session_shutdown');
+  assert.equal(widgets.has('usage-model-health'), false);
+  assert.equal(h.statuses.get('pi-pulse-fast'), 'Fast n/a');
+  await events.get('session_shutdown')!({}, ctx);
+  bus.emit('pi-pulse:telemetry-request:v1', {});
+  assert.equal(widgets.has('usage-model-health'), false);
+  assert.equal(h.statuses.get('pi-pulse-fast'), undefined);
+});
+
+test('telemetry does not claim fallback if widget registration fails', async (t) => {
+  const bus = createEventBus();
+  const h = harness(t, 'bars', [], bus);
+  h.ctx.model = { provider: 'other', id: 'test' } as typeof h.ctx.model;
+  const announcements: unknown[] = [];
+  bus.on('pi-pulse:telemetry-dock:v1', (value) => announcements.push(value));
+  Object.assign(h.ctx.ui, { setWidget() { throw new Error('UI unavailable'); } });
+  await h.event('session_start');
+  bus.emit('pi-pulse:telemetry:v1', { kind: 'fast', scope: ':other/test', data: 'off' });
+  assert.ok(!announcements.some((value) => (value as { available: boolean }).available));
+  Object.assign(h.ctx.ui, { setWidget() {} });
+});
+
+test('health and telemetry share one dock through updates, clearing, model changes and shutdown', async (t) => {
+  const bus = createEventBus();
+  const h = harness(t, 'bars', [], bus);
+  const widgets = new Map<string, Component>();
+  Object.assign(h.ctx.ui, { setWidget(key: string, factory: Parameters<ExtensionContext['ui']['setWidget']>[1]) {
+    if (!factory) widgets.delete(key);
+    else if (typeof factory === 'function') widgets.set(key, factory({} as never, h.ctx.ui.theme));
+  } });
+  const flash = { provider: 'hms', id: 'deepseek-v4.1-flash-free' };
+  const sol = { provider: 'xingchiapi', id: 'gpt-6.1-sol' };
+  let models = [flash, sol];
+  const pending = new Map<string, (value: unknown) => void>();
+  h.ctx.model = sol as typeof h.ctx.model;
+  h.ctx.modelRegistry = {
+    getAll: () => models,
+    streamSimple: (model: { id: string }) => ({ result: () => new Promise((resolve) => pending.set(model.id, resolve)) }),
+  } as unknown as typeof h.ctx.modelRegistry;
+  const render = () => widgets.get('usage-model-health')!.render(100).join('\n');
+  const publish = (kind: string, data: unknown, scope = ':xingchiapi/gpt-6.1-sol') => bus.emit('pi-pulse:telemetry:v1', { kind, data, scope });
+  await h.event('session_start');
+  publish('compact', { tokens: 146_076, limit: 300_000, contextWindow: 1_000_000 });
+  publish('fast', 'off');
+  assert.match(render(), /HMS.*XINGCHI.*COMPACT @30%.*FAST/);
+  assert.match(render(), /Flash ○.*Sol ○.*~153[.]9k left.*Off ○/);
+  assert.equal(widgets.has('usage-telemetry'), false);
+  const reply = { stopReason: 'stop', content: [{ type: 'text', text: 'OK' }] };
+  pending.get(flash.id)!(reply);
+  await flush();
+  assert.match(render(), /Flash ✓.*~153[.]9k left.*Off ○/);
+  publish('compact', { tokens: 200_000, limit: 300_000, contextWindow: 1_000_000 });
+  publish('fast', 'on');
+  assert.match(render(), /Flash ✓.*~100k left.*On ✓/);
+  pending.get(sol.id)!(reply);
+  await flush();
+  models = [];
+  t.mock.timers.tick(60_000);
+  await flush();
+  publish('fast', 'on');
+  assert.doesNotMatch(render(), /HMS|XINGCHI/);
+  assert.match(render(), /COMPACT @30%.*FAST/);
+  assert.match(render(), /~100k left.*On ✓/);
+  models = [flash, sol];
+  await h.event('agent_settled');
+  assert.match(render(), /Flash ○.*Sol ○.*~100k left.*On ✓/);
+  h.ctx.model = { provider: 'other', id: 'test' } as typeof h.ctx.model;
+  await h.event('model_select');
+  publish('fast', 'n/a', ':other/test');
+  assert.doesNotMatch(render(), /COMPACT/);
+  assert.match(render(), /N\/A —/);
+  await h.event('session_shutdown');
+  for (const finish of pending.values()) finish(reply);
+  await flush();
+  assert.equal(widgets.has('usage-model-health'), false);
 });

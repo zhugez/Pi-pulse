@@ -4,16 +4,26 @@ import { isFastModeEnabledByDefault } from "./config.ts";
 import { applyFastMode, supportsFastMode } from "./fast-mode.ts";
 
 const STATUS_KEY = "pi-pulse-fast";
-const STATUS_LABELS = {
-	on: "Fast: ON",
-	off: "Fast: OFF",
-	unavailable: "Fast: unavailable",
-} as const;
-
 type Toggle = "on" | "off" | "toggle";
 
 export default function registerFastMode(pi: ExtensionAPI): void {
 	let enabled = false;
+	let dockAvailable = false;
+	let lastCtx: ExtensionContext | undefined;
+	let unsubscribeDock: (() => void) | undefined;
+	let unsubscribeSnapshot: (() => void) | undefined;
+	function subscribeDock(): void {
+		unsubscribeDock?.();
+		unsubscribeSnapshot?.();
+		unsubscribeDock = pi.events?.on("pi-pulse:telemetry-dock:v1", (event: unknown) => {
+			if (!event || typeof event !== "object" || !("available" in event) || typeof event.available !== "boolean" || event.available === dockAvailable) return;
+			dockAvailable = event.available;
+			if (lastCtx) updateStatus(lastCtx);
+		});
+		unsubscribeSnapshot = pi.events?.on("pi-pulse:telemetry-request:v1", () => { if (lastCtx) updateStatus(lastCtx); });
+	}
+	subscribeDock();
+
 
 	function isUsingOAuth(ctx: ExtensionContext): boolean {
 		if (ctx.model?.provider !== "openai") return false;
@@ -29,13 +39,14 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 
 	function updateStatus(ctx: ExtensionContext): void {
 		if (ctx.mode !== "tui") return;
+		lastCtx = ctx;
 		const supported = supportsFastMode(ctx.model);
-		const label = !supported
-			? STATUS_LABELS.unavailable
-			: enabled
-				? STATUS_LABELS.on
-				: STATUS_LABELS.off;
-		ctx.ui.setStatus(STATUS_KEY, label);
+		const state = !supported ? "n/a" : enabled ? "on" : "off";
+		const scope = `${ctx.sessionManager?.getSessionId?.() ?? ""}:${ctx.model?.provider ?? ""}/${ctx.model?.id ?? ""}`;
+		pi.events?.emit("pi-pulse:telemetry:v1", { kind: "fast", scope, data: state });
+		if (dockAvailable) { ctx.ui.setStatus(STATUS_KEY, undefined); return; }
+		const { theme } = ctx.ui;
+		ctx.ui.setStatus(STATUS_KEY, `${theme.fg("muted", "Fast")} ${theme.fg(state === "on" ? "success" : "dim", state)}`);
 	}
 
 	function notify(
@@ -90,6 +101,7 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		subscribeDock();
 		enabled = await isFastModeEnabledByDefault();
 		updateStatus(ctx);
 	});
@@ -99,6 +111,10 @@ export default function registerFastMode(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
+		unsubscribeDock?.();
+		unsubscribeSnapshot?.();
+		lastCtx = undefined;
+		pi.events?.emit("pi-pulse:telemetry:v1", { kind: "fast", scope: "", data: null });
 		if (ctx.mode === "tui") ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 }

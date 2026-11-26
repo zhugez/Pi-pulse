@@ -232,6 +232,7 @@ export interface RefreshResult {
 }
 
 interface StatusCtx {
+	sessionManager?: ExtensionContext["sessionManager"];
 	model?: ExtensionContext["model"];
 	modelRegistry?: ExtensionContext["modelRegistry"];
 	ui: {
@@ -2176,13 +2177,14 @@ export function formatRefreshNotice(results: readonly RefreshResult[]): string {
 
 type ModelHealth = { ok?: boolean; elapsed?: number; checkedAt?: number };
 
-/** Compact dock only. Full diagnostics and polling details remain in /usage. */
+/** Shared two-row dock. Full diagnostics and polling details remain in /usage. */
 export function renderModelHealth(
 	health: ReadonlyMap<string, ModelHealth>,
 	theme: { fg(color: string, text: string): string },
 	width: number,
+	telemetry: SessionTelemetry = {},
 ): string[] {
-	if (width < 1 || !health.size) return [];
+	if (width < 1 || (!health.size && !telemetry.compact && !telemetry.fast)) return [];
 	const aliases: Record<string, string> = {
 		"hms/deepseek-v4.1-flash-free": "Flash",
 		"xingchiapi/gpt-6.1-sol": "Sol",
@@ -2215,22 +2217,68 @@ export function renderModelHealth(
 		const body = items.join("   ");
 		return { heading, body, items, width: Math.max(visibleWidth(heading), visibleWidth(body)) };
 	});
-	if (blocks.reduce((sum, block) => sum + block.width, 0) + (blocks.length - 1) * 6 <= width) {
-		return ["heading", "body"].map((row) => blocks.map((block, index) => {
-			const text = row === "heading" ? block.heading : block.body;
-			return text + (index < blocks.length - 1 ? " ".repeat(block.width - visibleWidth(text) + 6) : "");
-		}).join(""));
+	const extras: [string, string][] = [];
+	if (telemetry.compact) {
+		const { tokens, limit, contextWindow } = telemetry.compact;
+		const threshold = Number((limit / contextWindow * 100).toFixed(1));
+		const remaining = tokens === null ? "usage pending ○" : tokens > limit ? "Ready !"
+			: `~${new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(limit - tokens + 1).replace("K", "k")} left`;
+		const near = tokens !== null && tokens >= limit * 0.9;
+		extras.push([`COMPACT @${threshold}%`, paint(near ? "peach" : "subtext0", near ? "warning" : "muted", remaining)]);
 	}
-	return blocks.flatMap((block) => {
-		const rows = wrapTextWithAnsi(block.heading, width);
+	if (telemetry.fast) {
+		const enabled = telemetry.fast === "on";
+		const label = enabled ? "On" : telemetry.fast === "off" ? "Off" : "N/A";
+		const state = enabled ? "✓" : telemetry.fast === "off" ? "○" : "—";
+		extras.push(["FAST", `${paint(enabled ? "lavender" : "subtext0", enabled ? "accent" : "muted", label)} ${paint(enabled ? "green" : "overlay1", enabled ? "success" : "dim", state)}`]);
+	}
+	for (const [title, body] of extras) {
+		const heading = paint("mauve", "accent", title);
+		blocks.push({ heading, body, items: [body], width: Math.max(visibleWidth(heading), visibleWidth(body)) });
+	}
+	const rows: string[] = [];
+	let columns: typeof blocks = [];
+	let used = 0;
+	const flush = () => {
+		if (!columns.length) return;
+		for (const row of ["heading", "body"]) rows.push(columns.map((block, index) => {
+			const text = row === "heading" ? block.heading : block.body;
+			return text + (index < columns.length - 1 ? " ".repeat(block.width - visibleWidth(text) + 6) : "");
+		}).join(""));
+		columns = [];
+		used = 0;
+	};
+	for (const block of blocks) {
+		if (block.width <= width) {
+			if (used + (columns.length ? 6 : 0) + block.width > width) flush();
+			used += (columns.length ? 6 : 0) + block.width;
+			columns.push(block);
+			continue;
+		}
+		flush();
+		rows.push(...wrapTextWithAnsi(block.heading, width));
 		let line = "";
 		for (const item of block.items) {
 			if (line && visibleWidth(`${line}   ${item}`) > width) { rows.push(...wrapTextWithAnsi(line, width)); line = ""; }
 			line = line ? `${line}   ${item}` : item;
 		}
 		if (line) rows.push(...wrapTextWithAnsi(line, width));
-		return rows;
-	});
+	}
+	flush();
+	return rows;
+}
+
+export interface SessionTelemetry {
+	compact?: { tokens: number | null; limit: number; contextWindow: number };
+	fast?: "on" | "off" | "n/a";
+}
+
+export function renderSessionTelemetry(
+	state: SessionTelemetry,
+	theme: { fg(color: string, text: string): string },
+	width: number,
+): string[] {
+	return renderModelHealth(new Map(), theme, width, state);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -2250,12 +2298,7 @@ export default function (pi: ExtensionAPI) {
 				(result.checkedAt !== undefined ? ` · ${result.elapsed}ms · ${Math.max(0, Math.floor((Date.now() - result.checkedAt) / 1000))}s ago` : ""))];
 	}
 	function renderHealth(ctx: StatusCtx) {
-		if (mode === "off" || !health.size) return;
-		if (ctx.ui.setWidget) ctx.ui.setWidget("usage-model-health", (_tui, theme) => ({
-			invalidate() {},
-			render: (width: number) => mode !== "off" ? renderModelHealth(health, theme, width) : [],
-		}), { placement: "belowEditor" });
-		else ctx.ui.setStatus("usage-model-health", renderModelHealth(health, ctx.ui.theme, 1000).join(" "));
+		renderTelemetry(ctx);
 	}
 	function clearHealth(ctx: StatusCtx) {
 		checkGeneration++;
@@ -2265,8 +2308,7 @@ export default function (pi: ExtensionAPI) {
 		checkAbort = undefined;
 		if (!health.size) return;
 		health.clear();
-		ctx.ui.setWidget?.("usage-model-health", undefined, { placement: "belowEditor" });
-		ctx.ui.setStatus("usage-model-health", undefined);
+		renderTelemetry(ctx);
 	}
 	async function probeModels(ctx: StatusCtx, models: NonNullable<StatusCtx["model"]>[]) {
 		if (checkAbort || mode === "off" || !models.length) return;
@@ -2360,6 +2402,79 @@ export default function (pi: ExtensionAPI) {
 		.filter((id) => !usageProviderCfgs.some((cfg) => cfg.id === id))
 		.map(createCodexLbCfg)];
 	let mode: UsageMode = prefs.mode;
+
+	let compactTelemetry: { scope: string; data: NonNullable<SessionTelemetry["compact"]> } | undefined;
+	let fastTelemetry: { scope: string; data: NonNullable<SessionTelemetry["fast"]> } | undefined;
+	let telemetryOwned = false;
+	let dockVisible = false;
+	let unsubscribeTelemetry: (() => void) | undefined;
+	function telemetryScope(ctx: StatusCtx): string {
+		const model = safeModel(ctx);
+		return `${ctx.sessionManager?.getSessionId?.() ?? ""}:${model?.provider ?? ""}/${model?.id ?? ""}`;
+	}
+	function announceTelemetry(available: boolean): void {
+		if (telemetryOwned === available) return;
+		telemetryOwned = available;
+		pi.events?.emit("pi-pulse:telemetry-dock:v1", { available });
+	}
+	function renderTelemetry(ctx: StatusCtx | undefined = currentCtx): void {
+		if (!ctx) return;
+		const ui = ctx.ui;
+		const scope = telemetryScope(ctx);
+		const state: SessionTelemetry = {
+			compact: compactTelemetry?.scope === scope ? compactTelemetry.data : undefined,
+			fast: fastTelemetry?.scope === scope ? fastTelemetry.data : undefined,
+		};
+		try {
+			if (mode === "off" || (!health.size && !state.compact && !state.fast)) {
+				if (dockVisible) {
+					ui.setWidget?.("usage-model-health", undefined, { placement: "belowEditor" });
+					ui.setStatus("usage-model-health", undefined);
+					dockVisible = false;
+				}
+				announceTelemetry(false);
+				return;
+			}
+			if (!ui.setWidget) {
+				ui.setStatus("usage-model-health", health.size ? renderModelHealth(health, ui.theme, 1000).join(" ") : undefined);
+				dockVisible = !!health.size;
+				announceTelemetry(false);
+				return;
+			}
+			ui.setStatus("usage-model-health", undefined);
+			ui.setWidget("usage-model-health", (_tui, theme) => ({
+				invalidate() {},
+				render: (width: number) => mode !== "off" ? renderModelHealth(health, theme, width, state) : [],
+			}), { placement: "belowEditor" });
+			dockVisible = true;
+			announceTelemetry(!!(state.compact || state.fast));
+		} catch {
+			announceTelemetry(false);
+		}
+	}
+	function subscribeTelemetry(): void {
+		unsubscribeTelemetry?.();
+		unsubscribeTelemetry = pi.events?.on("pi-pulse:telemetry:v1", (value: unknown) => {
+			const event = asRecord(value);
+			if (!event || typeof event.scope !== "string") return;
+			if (event.kind === "compact") {
+				if (event.data == null) compactTelemetry = undefined;
+				else {
+					const data = asRecord(event.data);
+					if (!data || (data.tokens !== null && (typeof data.tokens !== "number" || !Number.isFinite(data.tokens) || data.tokens < 0))
+						|| typeof data.limit !== "number" || !Number.isFinite(data.limit) || data.limit <= 0
+						|| typeof data.contextWindow !== "number" || !Number.isFinite(data.contextWindow) || data.contextWindow < data.limit) return;
+					compactTelemetry = { scope: event.scope, data: { tokens: data.tokens, limit: data.limit, contextWindow: data.contextWindow } };
+				}
+			} else if (event.kind === "fast") {
+				if (event.data == null) fastTelemetry = undefined;
+				else if (event.data === "on" || event.data === "off" || event.data === "n/a") fastTelemetry = { scope: event.scope, data: event.data };
+				else return;
+			} else return;
+			renderTelemetry();
+		});
+	}
+	subscribeTelemetry();
 
 	function renderUi(
 		ui: StatusCtx["ui"] | undefined,
@@ -2747,6 +2862,8 @@ export default function (pi: ExtensionAPI) {
 	/** Route to the right provider config for the active model. */
 	function route(ctx: StatusCtx, force: boolean) {
 		currentCtx = ctx;
+		renderTelemetry();
+		pi.events?.emit("pi-pulse:telemetry-request:v1", {});
 		if (mode === "off") clearHealth(ctx);
 		else startHealth(ctx);
 		pi.events?.emit("codex-pool:request-account", {});
@@ -2800,6 +2917,8 @@ export default function (pi: ExtensionAPI) {
 
 		mode = next;
 		await savePrefs({ ...prefs, mode });
+		renderTelemetry();
+		pi.events?.emit("pi-pulse:telemetry-request:v1", {});
 
 		if (next === "off") {
 			clearHealth(ctx);
@@ -3069,6 +3188,9 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 	pi.on("session_start", async (_event, ctx) => {
+		subscribeTelemetry();
+		compactTelemetry = undefined;
+		fastTelemetry = undefined;
 		clearHealth(ctx);
 		route(ctx, true);
 	});
@@ -3084,6 +3206,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		unsubscribeTelemetry?.();
+		compactTelemetry = undefined;
+		fastTelemetry = undefined;
+		renderTelemetry(ctx);
 		clearHealth(ctx);
 		stopDiskCacheWatcher();
 		if (cacheSyncTimer) {

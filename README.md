@@ -166,6 +166,8 @@ Supported providers:
 
 Usage appears in its own responsive strip below the editor, separate from the throughput footer. Wide terminals retain progress bars; narrow terminals switch to percentages and wrap without dropping quota windows or reset countdowns. Resizing back restores your selected style automatically.
 
+Compact and Fast share the model-health dock’s two-row layout, column spacing, and status colors. With Capsule compact checkpoints enabled, `COMPACT @30%` shows the configured trigger above the remaining token budget. Whole columns wrap together when the terminal narrows. If the dock is hidden or unavailable, each extension restores its footer label.
+
 The extension refreshes around quota resets, coalesces overlapping requests, rejects stale results, and retries failures with exponential backoff. OpenAI Codex uses a shared disk cache. Antigravity Pool and custom codex-lb quotas stay session-local so separate profiles, hosts, or accounts do not share cached quota data.
 
 HMS and xingchiapi models also receive automatic inference checks in every Pi session, regardless of the active provider. The extension checks each configured chat model with an isolated `Reply OK.` request, with at most two concurrent checks and a 30-second timeout per model. It starts the next sweep 60 seconds after the previous sweep completes. These requests can consume tokens and credits. A compact two-column HMS/XINGCHI toolbar shows short model labels, status symbols, and successful response times below the editor. Full model IDs, result age, and polling details remain in `/usage`. An `OK` means the model returned non-empty text during that check, not guaranteed future availability. A failed check means no usable response arrived within the check's limits.

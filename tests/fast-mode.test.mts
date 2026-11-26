@@ -52,12 +52,14 @@ test("/fast updates footer status across toggles, model changes and shutdown", a
 	const commands = new Map<string, { handler(args: string, ctx: any): Promise<void> }>();
 	const statuses = new Map<string, string | undefined>();
 	const notices: string[] = [];
+	const styles: [string, string][] = [];
 	const ctx = {
 		mode: "tui",
 		hasUI: true,
 		model: xingchiModel,
 		modelRegistry: {},
 		ui: {
+			theme: { fg: (color: string, text: string) => { styles.push([color, text]); return text; } },
 			setStatus: (key: string, value: string | undefined) => statuses.set(key, value),
 			notify: (message: string) => notices.push(message),
 		},
@@ -71,28 +73,30 @@ test("/fast updates footer status across toggles, model changes and shutdown", a
 	} as unknown as ExtensionAPI);
 
 	await events.get("model_select")!({}, ctx);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: OFF");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast off");
+	assert.deepEqual(styles.at(-1), ["dim", "off"]);
 	await commands.get("fast")!.handler("on", ctx);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: ON");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast on");
+	assert.deepEqual(styles.at(-1), ["success", "on"]);
 	const rewritten = await events.get("before_provider_request")!({ payload: { stream: true } }, ctx);
 	assert.deepEqual(rewritten, { stream: true, service_tier: "fast" });
 	assert.equal(notices.at(-1)?.startsWith("Fast mode enabled"), true);
 
 	const unsupported = { ...ctx, model: { ...xingchiModel, provider: "other" } } as unknown as ExtensionContext;
 	await events.get("model_select")!({}, unsupported);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: unavailable");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast n/a");
 	await commands.get("fast")!.handler("on", unsupported);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: unavailable");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast n/a");
 	assert.equal(await events.get("before_provider_request")!({}, unsupported), undefined);
 	await events.get("model_select")!({}, ctx);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: ON");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast on");
 	await commands.get("fast")!.handler("off", ctx);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: OFF");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast off");
 	const rpc = { ...ctx, mode: "rpc" } as ExtensionContext;
 	await commands.get("fast")!.handler("on", rpc);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: OFF");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast off");
 	await events.get("model_select")!({}, ctx);
-	assert.equal(statuses.get("pi-pulse-fast"), "Fast: ON");
+	assert.equal(statuses.get("pi-pulse-fast"), "Fast on");
 	await events.get("session_shutdown")!({}, ctx);
 	assert.equal(statuses.get("pi-pulse-fast"), undefined);
 });
