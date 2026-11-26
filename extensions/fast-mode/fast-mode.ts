@@ -33,6 +33,7 @@ const FAST_MODEL_IDS: ReadonlySet<string> = new Set([
 export function supportsFastMode(model: FastModel | undefined): boolean {
 	if (!model || !FAST_MODEL_IDS.has(model.id)) return false;
 	return model.provider === "openai-codex" ||
+		(model.provider === "codex-pool" && model.api === "openai-codex-responses") ||
 		((model.provider === "openai" || model.provider === "xingchiapi") &&
 			model.api === "openai-responses");
 }
@@ -43,7 +44,7 @@ export function applyFastMode(
 	isUsingOAuth = false,
 ): unknown {
 	if (!supportsFastMode(model) || !isRecord(payload)) return payload;
-	const tier = model?.provider === "openai-codex" || isUsingOAuth
+	const tier = model?.provider === "openai-codex" || model?.provider === "codex-pool" || isUsingOAuth
 		? PRIORITY_SERVICE_TIER
 		: FAST_SERVICE_TIER;
 	return { ...payload, service_tier: tier };
