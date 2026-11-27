@@ -20,6 +20,8 @@ export class GoalScheduler {
 	private runPacingEnabled = false;
 	private denied = false;
 	private unsubscribe: (() => void) | undefined;
+	private unsubscribeHandoff: (() => void) | undefined;
+	private handoffHeld = false;
 	private core: GoalCore;
 	constructor(core: GoalCore) { this.core = core; }
 
@@ -110,12 +112,21 @@ export class GoalScheduler {
 	attach(ctx: ExtensionContext): void {
 		this.ctx = ctx;
 		this.unsubscribe?.();
+		this.unsubscribeHandoff?.();
+		this.unsubscribeHandoff = this.core.pi.events?.on("pi:session-handoff:hold", (event: unknown) => {
+			const data = asRecord(event);
+			if (!data || !this.ctx || data.sessionId !== this.owner(this.ctx) || typeof data.held !== "boolean") return;
+			this.handoffHeld = data.held;
+			this.cancelTimer();
+			this.core.runtime.clearContinuationTimer();
+			if (!this.handoffHeld) this.schedule(this.ctx);
+		});
 		this.unsubscribe = this.core.pi.events?.on("pi-goal:wake", (event: unknown) => {
 			const raw = asRecord(event);
 			if (raw && this.ctx) this.signal(this.ctx, raw.goalId, raw.waitToken);
 		});
 	}
-	shutdown(): void { this.cancelTimer(); this.unsubscribe?.(); this.unsubscribe = undefined; this.ctx = undefined; this.denied = false; }
+	shutdown(): void { this.cancelTimer(); this.unsubscribe?.(); this.unsubscribeHandoff?.(); this.unsubscribe = undefined; this.unsubscribeHandoff = undefined; this.ctx = undefined; this.denied = false; this.handoffHeld = false; }
 
 	restore(ctx: ExtensionContext): void {
 		this.attach(ctx);
@@ -125,7 +136,16 @@ export class GoalScheduler {
 			this.core.reconcileFocusedGoalFromDisk(ctx);
 			const goal = this.core.state.goal;
 			if (!goal || goal.status !== "active" || !goal.autoContinue || !goal.scheduler) return;
-			const s = goal.scheduler;
+			let s = goal.scheduler;
+			const handoff = ctx.sessionManager.getBranch().slice().reverse().find(entry => entry.type === "custom" && entry.customType === "pi-session-handoff");
+			const transfer = handoff?.type === "custom" ? asRecord(handoff.data) : null;
+			if (s.owner !== this.owner(ctx) && transfer?.goalId === goal.id && transfer.fromSessionId === s.owner && !["claimed", "running", "interrupted"].includes(s.phase)) {
+				const updated = this.write(ctx, g => {
+					if (!g.scheduler || g.scheduler.owner !== transfer.fromSessionId) throw new Error("Goal ownership changed during handoff.");
+					return { ...g, scheduler: { ...g.scheduler, owner: this.owner(ctx), generation: randomUUID() } };
+				});
+				s = updated.scheduler!;
+			}
 			if (s.owner !== this.owner(ctx)) { ctx.ui.notify(commandInstructions("Goal owned by another session. Use /goal-resume to take ownership.", this.core.loadedCommands), "info"); return; }
 			if (["claimed", "running", "interrupted"].includes(s.phase)) {
 				this.pause(ctx, commandInstructions("Previous autonomous execution was interrupted. Use /goal-resume; its dispatch will not be replayed.", this.core.loadedCommands));
@@ -352,7 +372,7 @@ export class GoalScheduler {
 		loadGoalSettings(ctx.cwd);
 	}
 	schedule(ctx: ExtensionContext): void {
-		if (this.inRun || this.denied || this.core.interruption.isHeld()) return;
+		if (this.handoffHeld || this.inRun || this.denied || this.core.interruption.isHeld()) return;
 		invalidateGoalSettingsCache();
 		this.safe(ctx, () => {
 			this.core.reconcileFocusedGoalFromDisk(ctx);
@@ -389,7 +409,7 @@ export class GoalScheduler {
 		});
 	}
 	claim(ctx: ExtensionContext): Record<string, unknown> | null {
-		if (this.core.interruption.isHeld()) return null;
+		if (this.handoffHeld || this.core.interruption.isHeld()) return null;
 		const generation = this.armedGeneration;
 		if (!generation) return null;
 		this.armedGeneration = undefined;
