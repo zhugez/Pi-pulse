@@ -10,6 +10,7 @@ The collection currently includes two observability extensions, integrated model
 
 - **Loop guard** — blocks byte-identical tool calls before they grind, with an actionable reason instead of a silent repeat.
 - **Mutation gate** — `/mutator` finds behavior no test checks, via [unclebob/mutator](https://github.com/unclebob/mutator).
+- **Invar** — `/invar setup` captures commands for your review, then checks exit code, stdout, and stderr against the approved baseline.
 - **CRAP gate** — `/crap` scores every function with [unclebob/crapper](https://github.com/unclebob/crapper) and reports the ones over CRAP 10.
 - **Comment checker** — runs `@code-yeongyu/comment-checker` after `write`/`edit`/`multiedit`/`apply_patch` and appends its warnings to the tool result.
 - **Code Lens (`code_inspect`)** — real-time in-flight diagnostics, read-guard protection against unread file edits, and symbol outline extraction.
@@ -73,6 +74,29 @@ The other half of [ub-mode](https://github.com/unclebob/ub-mode): a mutant survi
 - **Differential after the first run**: mutator keeps `.metrics/mutate/`, so later runs only re-run survivors and functions whose text changed.
 - **Exit codes are results**: `0` all killed, `2` baseline tests failed, `3` a mutant survived. Only other codes are errors.
 - **Bounded**: 64 KiB output, 15 min default (`PI_MUTATOR_TIMEOUT_MS`), discovery via `PI_MUTATOR` → `PATH` → `./mutator`.
+
+### Invar (`/invar`)
+
+[Invar](https://github.com/zhugez/invar) records command behavior before code changes. Verification compares exit code, stdout, and stderr byte for byte. A pass covers the configured examples. Use existing tests alongside Invar.
+
+[Pi Capsule](https://github.com/zhugez/pi-capsule) installs the Invar CLI during restore and package installation or updates on Linux/WSL x86_64. Standalone Pulse users can follow Invar's [installation instructions](https://github.com/zhugez/invar#install). The adapter defaults to `~/.local/bin/invar`. Set `INVAR_BIN` to an absolute executable path before starting Pi to override it. Pi 0.87.0 or later is required.
+
+```text
+/invar setup    # review commands, capture behavior, review bytes, approve the baseline
+/invar verify   # verify now; /invar alone does the same
+/invar status   # show whether this project is enabled
+/invar off      # disable automatic verification; preserve baseline files
+```
+
+When the CLI is installed, opening a trusted project in interactive or RPC mode automatically offers setup. No setup command is required. Declining the offer or using `/invar off` persists your choice for that project. Use `/invar setup` to enable it later. Set `PI_INVAR_AUTO_SETUP=0` before starting Pi to suppress startup offers globally.
+
+Setup opens an existing `invar.json`, or asks for a JSON argument array such as `["node", "report.mjs"]`. Review the commands before capture. Review the captured bytes before approval. Cancelling or editing the byte preview leaves the candidate unapproved. No configured commands run before you approve capture.
+
+After approval and an initial passing check, the adapter verifies before the agent settles after potentially modifying tool calls, including shell and unannotated custom tools. Built-in reads and tools annotated as read-only do not trigger checks. A failure requests one automatic repair continuation. A second failure is reported without another automatic retry. The agent receives instructions to preserve the baseline and report unresolved failures.
+
+The adapter pins the executable, configuration, and accepted baseline by SHA-256 in the active Pi agent directory under `invar/`. Changed pins stop execution until you restore the reviewed files or explicitly review them again with `/invar setup`. No commands run automatically in untrusted or unregistered projects. `/invar off` removes the registration and records a disabled marker so startup does not offer setup again.
+
+Commit `invar.json`, `.invar/.gitignore`, and `.invar/accepted.json` for review. Commands run with your filesystem and network access. Use deterministic commands: timestamps, random values, or unstable output can cause regressions. Verification does not approve new behavior or replace the baseline.
 
 ### CRAP gate (`/crap`)
 
