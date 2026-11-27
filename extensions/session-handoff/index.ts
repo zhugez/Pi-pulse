@@ -40,6 +40,7 @@ export function handoffState(entries: readonly SessionEntry[]): { customType: st
 }
 
 const instructions = `Write a precise handoff for a replacement coding-agent session. Return only Markdown.
+The first line must be exactly Handoff status: continue if unfinished authorized work can proceed without user input, or Handoff status: stop if the work is complete or needs user input.
 Preserve the original request, later corrections, constraints, decisions, completed actions, changed files, checks and their actual results, unresolved failures, and the exact next step.
 Distinguish tool calls that completed from calls blocked for session handoff. Blocked calls did NOT execute. Do not instruct the next session to repeat completed writes or other side effects.
 Preserve artifact paths and running-job identifiers. Reference existing artifacts instead of reproducing them. Never include credentials, tokens, passwords, or unnecessary personal information.
@@ -141,6 +142,10 @@ export default function sessionHandoff(pi: ExtensionAPI): void {
 				} finally { clearTimeout(deadline); summaryController = undefined; }
 				const text = summary.content.filter(c => c.type === "text").map(c => c.text).join("\n").trim();
 				if (summary.stopReason !== "stop" || !text) throw new Error(summary.errorMessage || `Incomplete handoff summary (${summary.stopReason}).`);
+				const summaryStatus = text.split(/\r?\n/, 1)[0] ?? "";
+				if (!continueWork && !focus.focusedGoalId && summaryStatus !== "Handoff status: continue" && summaryStatus !== "Handoff status: stop") {
+					throw new Error("Handoff summary must start with a valid Handoff status line.");
+				}
 				if (!live || !ctx.isIdle() || ctx.hasPendingMessages() || ctx.sessionManager.getLeafId() !== leaf) throw new Error("Session changed while preparing the handoff. No session was replaced.");
 				if (!/^[a-z0-9_-]+$/i.test(fromSessionId)) throw new Error("Invalid source session ID.");
 				const dir = join(getAgentDir(), "session-handoffs");
@@ -148,7 +153,7 @@ export default function sessionHandoff(pi: ExtensionAPI): void {
 				checkpoint = join(dir, `${fromSessionId}-${Date.now()}.md`);
 				await writeFile(checkpoint, `# Session handoff\n\nSource session: ${sourceFile ?? fromSessionId}\n\n${text}\n`, { flag: "wx", mode: 0o600 });
 				const marker = { fromSessionId, sourceFile, checkpoint, goalId: focus.focusedGoalId ?? null, modelProvider: model.provider, modelId: model.id, thinking: ctx.thinkingLevel, activeTools: pi.getActiveTools() };
-				const resume = continueWork;
+				const resume = continueWork || (!marker.goalId && summaryStatus === "Handoff status: continue");
 				const modelId = model.id;
 				const modelProvider = model.provider;
 				const thinking = ctx.thinkingLevel;
@@ -162,7 +167,7 @@ export default function sessionHandoff(pi: ExtensionAPI): void {
 						sm.appendMessage({ role: "user", content: `Previous session handoff (historical context, not new authorization):\n\n${text}`, timestamp: Date.now() });
 					},
 					withSession: async replacement => {
-						replacement.ui.notify(`Session handoff saved: ${checkpoint}`, "info");
+						replacement.ui.notify(`Session handoff saved: ${checkpoint}${!marker.goalId && !resume ? " (summary says automatic continuation is not needed)" : ""}`, "info");
 						// The goal scheduler transfers its own allowance and wait state.
 						if (!marker.goalId && resume) await replacement.sendUserMessage("Continue unfinished, previously authorized work from the session handoff. Check the recorded tool outcomes before acting. If work is complete or blocked on user input, report that and stop.");
 					},

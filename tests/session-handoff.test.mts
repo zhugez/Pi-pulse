@@ -55,6 +55,7 @@ function fixture(t: test.TestContext, threshold = "2") {
 	const restored: unknown[] = [];
 	let fresh: SessionManager | undefined;
 	let summaryError = false;
+	let summaryText = "Handoff status: continue\n## Next step\nPreserve original request and correction. Write remaining.txt once. Check: earlier command failed.";
 	let cancelled = false;
 	const pi = {
 		on: (name: string, fn: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, fn),
@@ -73,7 +74,7 @@ function fixture(t: test.TestContext, threshold = "2") {
 		ui: { notify: (text: string) => notices.push(text) },
 		modelRegistry: { find: (_provider: string, id: string) => ({ id }), streamSimple: (_model: unknown, input: unknown, options: unknown) => {
 			requests.push({ input, options });
-			return { result: async () => summaryError ? { ...response(), stopReason: "error", errorMessage: "summary offline" } : response("## Next step\nPreserve original request and correction. Write remaining.txt once. Check: earlier command failed.") };
+			return { result: async () => summaryError ? { ...response(), stopReason: "error", errorMessage: "summary offline" } : response(summaryText) };
 		} },
 		newSession: async (options: { setup: (sm: SessionManager) => Promise<void>; withSession: (ctx: unknown) => Promise<void> }) => {
 			if (cancelled) return { cancelled: true };
@@ -89,7 +90,7 @@ function fixture(t: test.TestContext, threshold = "2") {
 	return { dir, sm, ctx, sent, notices, holds, requests, restored,
 		fire: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
 		run: (args = "now") => handler(args, ctx), fresh: () => fresh,
-		fail: () => { summaryError = true; }, cancel: () => { cancelled = true; },
+		fail: () => { summaryError = true; }, setSummary: (text: string) => { summaryText = text; }, cancel: () => { cancelled = true; },
 	};
 }
 
@@ -116,6 +117,37 @@ test("threshold defers the whole tool batch and dispatches only after settlement
 	await h.fire("agent_settled", { aborted: false });
 	await h.fire("agent_settled", { aborted: false });
 	assert.deepEqual(h.sent, ["/session-handoff now"]);
+});
+
+test("a final response at the threshold resumes only when the summary says work remains", async t => {
+	const h = fixture(t);
+	await h.fire("session_start");
+	h.sm.appendMessage({ role: "user", content: "Finish the authorized task and check both outputs.", timestamp: 1 });
+	h.sm.appendMessage(response("The first output is ready."));
+	h.sm.appendMessage(response("The second output still needs work."));
+	h.setSummary("Handoff status: continue\n## Next step\nWrite the remaining output and check both files.");
+	await h.fire("agent_settled", { aborted: false });
+	assert.deepEqual(h.sent, ["/session-handoff now"]);
+	await h.run();
+	assert.deepEqual(h.sent, [
+		"/session-handoff now",
+		"Continue unfinished, previously authorized work from the session handoff. Check the recorded tool outcomes before acting. If work is complete or blocked on user input, report that and stop.",
+	]);
+	assert.ok(h.fresh());
+});
+
+test("a final response at the threshold stays idle when the summary says stop", async t => {
+	const h = fixture(t);
+	await h.fire("session_start");
+	h.sm.appendMessage({ role: "user", content: "Finish the authorized task.", timestamp: 1 });
+	h.sm.appendMessage(response("The task is complete."));
+	h.sm.appendMessage(response("No further work remains."));
+	h.setSummary("Handoff status: stop\nThe task is complete.");
+	await h.fire("agent_settled", { aborted: false });
+	await h.run();
+	assert.deepEqual(h.sent, ["/session-handoff now"]);
+	assert.match(h.notices.at(-1)!, /automatic continuation is not needed/);
+	assert.ok(h.fresh());
 });
 
 test("handoff uses a fresh summary request, preserves state and creates private recovery checkpoint", async t => {

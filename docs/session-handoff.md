@@ -36,7 +36,7 @@ Pi saves the summary under `~/.pi/agent/session-handoffs/`, using a directory mo
 
 The latest goal focus, todo snapshot and Ponytail mode transfer as native state entries. The replacement restores the source model, thinking level and active tools during the new-session lifecycle. A later manual model selection or tool configuration remains effective on reload and resume.
 
-An active focused goal transfers scheduler ownership only when the saved predecessor matches its existing owner. Its spent autonomous-run allowance, wait state and task data remain intact. The scheduler holds new dispatches while the summary is prepared. Paused goals remain paused. A session without a focused goal continues deferred work automatically. When a final answer reaches the threshold, Pi prepares an idle replacement session without inventing another task.
+An active focused goal transfers scheduler ownership only when the saved predecessor matches its existing owner. Its spent autonomous-run allowance, wait state and task data remain intact. The scheduler holds new dispatches while the summary is prepared. Paused goals remain paused. A session without a focused goal resumes automatically after a deferred tool call. When the threshold follows a final response, the summary must begin with `Handoff status: continue` or `Handoff status: stop`. The first status continues unfinished, previously authorized work. The second leaves the replacement idle because work is complete or needs user input.
 
 Existing `session_before_switch` guards can cancel replacement, including guards for background work. The extension does not transfer arbitrary extension process state or claim that background processes can migrate.
 

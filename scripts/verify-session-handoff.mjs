@@ -17,6 +17,9 @@ await mkdir(sessions);
 const live = process.argv.includes("--live");
 const trace = [];
 let server;
+let verificationMode = "tool-call";
+const counts = new Map();
+let finalResponseAutoResume = false;
 
 function emitResponse(res, item) {
 	res.writeHead(200, { "content-type": "text/event-stream" });
@@ -46,7 +49,6 @@ try {
 		try { await writeFile(join(agent, "auth.json"), await readFile(join(sourceDir, "auth.json")), { mode: 0o600 }); } catch (error) { if (error.code !== "ENOENT") throw error; }
 		modelId = "gpt-6.1-sol";
 	} else {
-		const counts = new Map();
 		server = createServer(async (req, res) => {
 			try {
 				let body = "";
@@ -54,10 +56,20 @@ try {
 				const data = JSON.parse(body);
 				const id = data.prompt_cache_key;
 				trace.push({ key: id ?? null, sessionHeader: req.headers["session-id"] ?? null, assistantItems: data.input.filter(i => i.role === "assistant" || i.type === "function_call").length });
-				if (!id) return emitResponse(res, textItem("Original request: append once to first.txt and second.txt. First write completed. A blocked handoff call did not execute. Check files before any remaining write. If both files exist, work is complete."));
+				const input = JSON.stringify(data.input);
+				if (!id) {
+					const completed = input.includes("All requested writes completed once.") || input.includes("FINAL_CASE_DONE");
+					const summary = completed
+						? "Handoff status: stop\nThe requested writes are complete."
+						: "Handoff status: continue\nThe authorized task still has a remaining write. Verify it in the replacement session.";
+					return emitResponse(res, textItem(summary));
+				}
 				const count = counts.get(id) ?? 0;
 				counts.set(id, count + 1);
-				if (counts.size === 1) emitResponse(res, callItem(count === 0 ? "first.txt" : "second.txt"));
+				if (verificationMode === "final-response") {
+					if (counts.size === 1) emitResponse(res, textItem("FINAL_CASE_PENDING: remaining.txt still needs the authorized write."));
+					else emitResponse(res, count === 0 ? callItem("remaining.txt") : textItem("FINAL_CASE_DONE: remaining.txt was written once."));
+				} else if (counts.size === 1) emitResponse(res, callItem(count === 0 ? "first.txt" : "second.txt"));
 				else emitResponse(res, count === 0 ? callItem("second.txt") : textItem("All requested writes completed once."));
 			} catch (error) { res.writeHead(500); res.end(String(error)); }
 		});
@@ -82,9 +94,9 @@ export default function(pi) {
 	const args = ["--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "-e", join(root, "extensions/session-handoff/index.ts"), "-e", traceExtension, "--provider", "xingchiapi", "--model", modelId, "--thinking", "low", "--session-handoff-turns", "2", "--session", old.getSessionFile(), "--session-dir", sessions, "--mode", "json", "-p", "--system-prompt", "Follow the user's exact request. Execute only authorized actions. Never repeat a completed write."];
 	if (live) args.push("--no-tools", "Reply with the recorded canary. Then stop.");
 	else args.push("--tools", "bash", "Append the line once to first.txt, then once to second.txt. Execute each write separately. Later correction: never append to an existing file. Stop after both writes.");
-	async function runPi(cliArgs) {
+	async function runPi(cliArgs, cwd = work) {
 		let stdout = "", stderr = "";
-		const child = spawn("pi", cliArgs, { cwd: work, env: { ...process.env, PI_CODING_AGENT_DIR: agent }, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn("pi", cliArgs, { cwd, env: { ...process.env, PI_CODING_AGENT_DIR: agent }, stdio: ["ignore", "pipe", "pipe"] });
 		child.stdout.on("data", data => { stdout += data; });
 		child.stderr.on("data", data => { stderr += data; });
 		const timer = setTimeout(() => child.kill("SIGTERM"), 150000);
@@ -134,7 +146,37 @@ export default function(pi) {
 		assert.equal(await readFile(join(work, "second.txt"), "utf8"), "once\n");
 		assert.ok(trace.filter(r => r.key).every(r => r.key === r.sessionHeader), "session-id and cache affinity must agree");
 	}
-	console.log(JSON.stringify({ mode: live ? "live-xingchiapi" : "local-cli", providerSessions: keys.length, requests: recorded.length, firstReplacementAssistantItems: 0, preservedSource: files.includes(old.getSessionFile().split("/").at(-1)), writesExactlyOnce: !live, status: "passed" }));
+	if (!live) {
+		verificationMode = "final-response";
+		counts.clear();
+		trace.length = 0;
+		await writeFile(log, "");
+		const finalWork = join(work, "final-response-work");
+		const finalSessions = join(work, "final-response-sessions");
+		await mkdir(finalWork);
+		await mkdir(finalSessions);
+		const source = SessionManager.create(finalWork, finalSessions);
+		source.appendMessage({ role: "user", content: "Write remaining.txt exactly once. The task is unfinished until that file contains `once`.", timestamp: Date.now() });
+		source.appendMessage({ role: "assistant", api: "openai-responses", provider: "xingchiapi", model: modelId, content: [{ type: "text", text: "The remaining write is still required." }], stopReason: "stop", timestamp: Date.now(), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+		const finalArgs = [...args];
+		finalArgs[finalArgs.indexOf("--session") + 1] = source.getSessionFile();
+		finalArgs[finalArgs.indexOf("--session-dir") + 1] = finalSessions;
+		finalArgs[finalArgs.length - 1] = "Review the task and report progress.";
+		await runPi(finalArgs, finalWork);
+		const histories = await Promise.all((await readdir(finalSessions)).filter(file => file.endsWith(".jsonl")).map(async file => ({
+			file,
+			entries: (await readFile(join(finalSessions, file), "utf8")).trim().split("\n").map(JSON.parse),
+		})));
+		const replacement = histories.find(({ entries }) => entries.some(entry => entry.type === "custom" && entry.customType === "pi-session-handoff" && entry.data?.fromSessionId === source.getSessionId()));
+		assert.ok(replacement, "The final-response handoff must create a replacement session.");
+		assert.ok(replacement.entries.some(entry => entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolName === "bash"), "The replacement session must execute unfinished work automatically.");
+		assert.equal(await readFile(join(finalWork, "remaining.txt"), "utf8"), "once\n");
+		const replacementId = replacement.entries.find(entry => entry.type === "session")?.id;
+		const requests = (await readFile(log, "utf8")).trim().split("\n").map(JSON.parse).filter(entry => !entry.kind);
+		assert.ok(requests.some(entry => entry.session === replacementId && entry.assistantItems === 0), "The replacement request must start without old assistant turns.");
+		finalResponseAutoResume = true;
+	}
+	console.log(JSON.stringify({ mode: live ? "live-xingchiapi" : "local-cli", providerSessions: keys.length, requests: recorded.length, firstReplacementAssistantItems: 0, preservedSource: files.includes(old.getSessionFile().split("/").at(-1)), writesExactlyOnce: !live, finalResponseAutoResume, status: "passed" }));
 } finally {
 	if (server) await new Promise(resolve => server.close(resolve));
 	await rm(work, { recursive: true, force: true });
