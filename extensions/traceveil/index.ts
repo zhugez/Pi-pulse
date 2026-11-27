@@ -49,6 +49,10 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
       const binary =
         process.env.TRACEVEIL_BIN ??
         join(homedir(), '.local', 'bin', process.platform === 'win32' ? 'traceveil.exe' : 'traceveil');
+      if ([binary, sessionFile, leaf].some((value) => value && /\p{Cc}/u.test(value))) {
+        ctx.ui.notify('Traceveil paths and leaf IDs must not contain control characters.', 'warning');
+        return;
+      }
       if (!isAbsolute(binary)) {
         ctx.ui.notify('TRACEVEIL_BIN must be an absolute executable path.', 'error');
         return;
@@ -97,12 +101,14 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
             /^([ \t]*)traceveil inspect (.+?) SESSION(.*)$/gm,
             (_line, indent, reference, policy) => {
               completed = true;
-              return `${indent}${quote(binary)} inspect ${reference} ${quote(sessionFile)}${policy} --leaf ${quote(leaf)}`;
+              const command = `${indent}${quote(binary)} inspect ${reference} ${quote(sessionFile)}${policy} --leaf ${quote(leaf)}`;
+              if (/\p{Cc}/u.test(command)) return 'Inspection command withheld because it contains control characters.';
+              return command;
             },
           );
           if (completed) {
             report = report
-              .replace('Inspection template (join wrapped lines):', 'Inspection command:')
+              .replace('Inspection template (join wrapped lines):', 'Inspection command (join wrapped lines):')
               .replace(/^[ \t]*Replace SESSION with the exact file, or --stdin with the same bytes\.\n?/m, '')
               .replace(/^[ \t]*Repeat --leaf ID if one was selected\. Policy above is pinned\.\n?/m, '');
           }

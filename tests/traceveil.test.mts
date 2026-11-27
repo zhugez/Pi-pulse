@@ -15,6 +15,7 @@ function harness(execute?: Execute) {
   const calls: Parameters<Execute>[] = [];
   const reports: string[][] = [];
   const notices: string[][] = [];
+  const progressTitles: string[] = [];
   const state = {
     file: '/project with spaces/session;literal.jsonl' as string | undefined,
     leaf: 'selected-tip' as string | null,
@@ -23,7 +24,10 @@ function harness(execute?: Execute) {
   const controller = new AbortController();
   const events = new Map<string, () => void>();
   let cancelProgress: (() => void) | undefined;
-  const ctx = {
+  const ctx: Pick<ExtensionCommandContext, 'cwd' | 'hasUI' | 'signal'> & {
+    sessionManager: Pick<ExtensionCommandContext['sessionManager'], 'getSessionFile' | 'getLeafId'>;
+    ui: Pick<ExtensionCommandContext['ui'], 'select' | 'notify' | 'editor'>;
+  } = {
     cwd: '/project with spaces',
     hasUI: true,
     signal: controller.signal as AbortSignal | undefined,
@@ -38,36 +42,40 @@ function harness(execute?: Execute) {
       },
     },
     ui: {
-      select: (_title: string, _options: string[], options: { signal: AbortSignal }) =>
-        new Promise<undefined>((resolve) => {
+      select: (title, _options, options) => {
+        progressTitles.push(title);
+        assert.ok(options?.signal);
+        const signal = options.signal;
+        return new Promise<undefined>((resolve) => {
           cancelProgress = () => resolve(undefined);
-          options.signal.addEventListener('abort', cancelProgress, { once: true });
-          if (options.signal.aborted) cancelProgress();
-        }),
-      notify: (message: string, level: string) => {
+          signal.addEventListener('abort', cancelProgress, { once: true });
+          if (signal.aborted) cancelProgress();
+        });
+      },
+      notify: (message, level = 'info') => {
         notices.push([message, level]);
       },
-      editor: async (title: string, text: string) => {
+      editor: async (title, text = '') => {
         reports.push([title, text]);
         return undefined;
       },
     },
   };
-  registerTraceveil(
-    {
-      on: (event: string, listener: () => void) => {
-        events.set(event, listener);
-        return () => events.delete(event);
-      },
-      registerCommand: (name, command) => {
-        commands.set(name, command);
-      },
-    } as ExtensionAPI,
-    async (...args) => {
-      calls.push(args);
-      return execute ? execute(...args) : { stdout: '\u001b[31mreport\u001b[0m\n', stderr: '' };
+  const api: Pick<ExtensionAPI, 'on' | 'registerCommand'> = {
+    on: (event: string, listener: (...args: never[]) => unknown) => {
+      events.set(event, listener);
+      return () => {
+        events.delete(event);
+      };
     },
-  );
+    registerCommand: (name, command) => {
+      commands.set(name, command);
+    },
+  };
+  registerTraceveil(api as ExtensionAPI, async (...args) => {
+    calls.push(args);
+    return execute ? execute(...args) : { stdout: '\u001b[31mreport\u001b[0m\n', stderr: '' };
+  });
   const command = commands.get('traceveil');
   assert.ok(command);
   return {
@@ -82,7 +90,8 @@ function harness(execute?: Execute) {
     calls,
     reports,
     notices,
-    run: (args = '') => command.handler(args, ctx as unknown as ExtensionCommandContext),
+    progressTitles,
+    run: (args = '') => command.handler(args, ctx as ExtensionCommandContext),
   };
 }
 
@@ -191,7 +200,12 @@ test('Traceveil discards stale, cancelled and incomplete output and keeps failur
 
 test('Traceveil cancels idle commands and discards late successful output', async () => {
   let finish!: (result: { stdout: string; stderr: string }) => void;
-  const h = harness(() => new Promise((resolve) => { finish = resolve; }));
+  const h = harness(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
   h.ctx.signal = undefined;
   const running = h.run('demo');
   h.cancel();
@@ -205,10 +219,16 @@ test('Traceveil cancels idle commands and discards late successful output', asyn
 
 test('Traceveil idle cancellation terminates the native subprocess without displaying output', async () => {
   let ready!: () => void;
-  const started = new Promise<void>((resolve) => { ready = resolve; });
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
   let child: ReturnType<typeof execFile> | undefined;
   const h = harness(async (_binary, _args, options) => {
-    const execution = promisify(execFile)(process.execPath, ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000);'], options);
+    const execution = promisify(execFile)(
+      process.execPath,
+      ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000);'],
+      options,
+    );
     child = execution.child;
     child.stdout!.once('data', ready);
     return execution;
@@ -234,14 +254,19 @@ test('Traceveil suppresses stale context access on session replacement for succe
   for (const fails of [false, true]) {
     let finish!: () => void;
     let stale = false;
-    const h = harness(() => new Promise((resolve, reject) => {
-      finish = () => fails ? reject({ code: 2 }) : resolve({ stdout: 'old report', stderr: '' });
-    }));
+    const h = harness(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = () => (fails ? reject({ code: 2 }) : resolve({ stdout: 'old report', stderr: '' }));
+        }),
+    );
     const manager = h.ctx.sessionManager;
-    Object.defineProperty(h.ctx, 'sessionManager', { get() {
-      assert.equal(stale, false, 'The replaced context must not be queried');
-      return manager;
-    } });
+    Object.defineProperty(h.ctx, 'sessionManager', {
+      get() {
+        assert.equal(stale, false, 'The replaced context must not be queried');
+        return manager;
+      },
+    });
     const running = h.run();
     h.events.get('session_shutdown')?.();
     stale = true;
@@ -254,31 +279,112 @@ test('Traceveil suppresses stale context access on session replacement for succe
   }
 });
 
-test('Traceveil emits a runnable inspection command preserving source, leaf and policy', { skip: process.platform === 'win32' }, async () => {
-  const directory = mkdtempSync(join(process.cwd(), '.traceveil-command-'));
-  const previousBinary = process.env.TRACEVEIL_BIN;
-  try {
-    const binary = join(directory, "traceveil 'literal");
-    writeFileSync(binary, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });
-    process.env.TRACEVEIL_BIN = binary;
-    const h = harness(async () => ({
-      stdout: `Inspection template (join wrapped lines):\n  traceveil inspect '@scope:f001' SESSION --agent pi --rule-threshold READ001=4\n  Replace SESSION with the exact file, or --stdin with the same bytes.\n  Repeat --leaf ID if one was selected. Policy above is pinned.`,
-      stderr: '',
-    }));
-    h.state.file = join(directory, "session 'quote;literal.jsonl");
-    h.state.leaf = "leaf 'literal";
-    await h.run();
-    const report = h.reports[0][1];
-    const command = report.split('\n').find((line) => line.includes(' inspect '));
-    assert.ok(command);
-    const result = await promisify(execFile)('/bin/sh', ['-c', command]);
-    assert.deepEqual(JSON.parse(result.stdout), [
-      'inspect', '@scope:f001', h.state.file, '--agent', 'pi', '--rule-threshold', 'READ001=4', '--leaf', h.state.leaf,
-    ]);
-    assert.doesNotMatch(report, /SESSION|Repeat --leaf/);
-  } finally {
-    if (previousBinary === undefined) delete process.env.TRACEVEIL_BIN;
-    else process.env.TRACEVEIL_BIN = previousBinary;
-    rmSync(directory, { recursive: true, force: true });
-  }
+for (const field of ['binary', 'file', 'leaf'] as const) {
+  test(`Traceveil rejects control-bearing ${field} before progress or execution`, async () => {
+    const previousBinary = process.env.TRACEVEIL_BIN;
+    try {
+      for (const control of [
+        '\u0000',
+        '\t',
+        '\n',
+        '\r',
+        '\u001b]0;untrusted\u0007',
+        '\u007f',
+        '\u0085',
+        '\u009b',
+        '\u009d',
+      ]) {
+        for (const mode of field === 'binary' ? ['', 'demo', 'doctor'] : ['']) {
+          const h = harness();
+          const rejected = field === 'leaf' ? `leaf${control}untrusted` : `/untrusted${control}/traceveil`;
+          process.env.TRACEVEIL_BIN = field === 'binary' ? rejected : '/tools/traceveil';
+          if (field === 'file') h.state.file = rejected;
+          if (field === 'leaf') h.state.leaf = rejected;
+          await h.run(mode);
+          assert.equal(h.calls.length, 0);
+          assert.deepEqual(h.progressTitles, []);
+          assert.deepEqual(h.reports, []);
+          assert.equal(h.events.size, 0);
+          assert.deepEqual(h.notices, [
+            ['Traceveil paths and leaf IDs must not contain control characters.', 'warning'],
+          ]);
+          assert.equal(h.notices.flat().join(' ').includes(rejected), false);
+        }
+      }
+    } finally {
+      if (previousBinary === undefined) delete process.env.TRACEVEIL_BIN;
+      else process.env.TRACEVEIL_BIN = previousBinary;
+    }
+  });
+}
+
+test('Traceveil withholds a completed inspection command containing controls', async () => {
+  const h = harness(async () => ({
+    stdout:
+      "Inspection template (join wrapped lines):\n  traceveil inspect '@scope:f001' SESSION --agent pi\t--rule-threshold READ001=4",
+    stderr: '',
+  }));
+  await h.run();
+  assert.equal(h.reports.length, 1);
+  assert.match(h.reports[0][1], /Inspection command withheld because it contains control characters/);
+  assert.doesNotMatch(h.reports[0][1], /traceveil inspect|\t/);
 });
+
+test(
+  'Traceveil emits a runnable inspection command preserving source, leaf and policy',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const directory = mkdtempSync(join(process.cwd(), '.traceveil-command-'));
+    const previousBinary = process.env.TRACEVEIL_BIN;
+    try {
+      const binary = join(directory, "traceveil 日本語\u200d 'literal;tool");
+      writeFileSync(binary, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n', {
+        mode: 0o755,
+      });
+      process.env.TRACEVEIL_BIN = binary;
+      const h = harness(async () => ({
+        stdout: `Inspection template (join wrapped lines):\n  traceveil inspect '@scope:f001' SESSION --agent pi\n    --rule-threshold READ001=4\n  Replace SESSION with the exact file, or --stdin with the same bytes.\n  Repeat --leaf ID if one was selected. Policy above is pinned.`,
+        stderr: '',
+      }));
+      h.state.file = join(directory, "session tiếng Việt\u200c 'quote;literal.jsonl");
+      h.state.leaf = "leaf 日本語\u200d 'literal;tip";
+      await h.run();
+      assert.equal(h.calls[0][0], binary);
+      assert.deepEqual(h.calls[0][1], [
+        'analyze',
+        '--color',
+        'never',
+        '--agent',
+        'pi',
+        '--leaf',
+        h.state.leaf,
+        '--',
+        h.state.file,
+      ]);
+      assert.equal(h.progressTitles.length, 1);
+      assert.deepEqual(h.notices, []);
+      const report = h.reports[0][1];
+      assert.match(report, /Inspection command \(join wrapped lines\):/);
+      const command = report.split('\n').slice(1).join(' ').trim();
+      assert.ok(command.includes(' inspect '));
+      assert.doesNotMatch(command, /\p{Cc}/u);
+      const result = await promisify(execFile)('/bin/sh', ['-c', command]);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        'inspect',
+        '@scope:f001',
+        h.state.file,
+        '--agent',
+        'pi',
+        '--leaf',
+        h.state.leaf,
+        '--rule-threshold',
+        'READ001=4',
+      ]);
+      assert.doesNotMatch(report, /SESSION|Repeat --leaf/);
+    } finally {
+      if (previousBinary === undefined) delete process.env.TRACEVEIL_BIN;
+      else process.env.TRACEVEIL_BIN = previousBinary;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
