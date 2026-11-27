@@ -281,7 +281,9 @@ test('Traceveil suppresses stale context access on session replacement for succe
 
 for (const field of ['binary', 'file', 'leaf'] as const) {
   test(`Traceveil rejects control-bearing ${field} before progress or execution`, async () => {
-    const previousBinary = process.env.TRACEVEIL_BIN;
+    const previousEnv = process.env;
+    // Native environment values truncate NUL; preserve synthetic validation inputs.
+    process.env = { ...previousEnv };
     try {
       for (const control of [
         '\u0000',
@@ -298,6 +300,7 @@ for (const field of ['binary', 'file', 'leaf'] as const) {
           const h = harness();
           const rejected = field === 'leaf' ? `leaf${control}untrusted` : `/untrusted${control}/traceveil`;
           process.env.TRACEVEIL_BIN = field === 'binary' ? rejected : '/tools/traceveil';
+          assert.equal(process.env.TRACEVEIL_BIN, field === 'binary' ? rejected : '/tools/traceveil');
           if (field === 'file') h.state.file = rejected;
           if (field === 'leaf') h.state.leaf = rejected;
           await h.run(mode);
@@ -312,8 +315,7 @@ for (const field of ['binary', 'file', 'leaf'] as const) {
         }
       }
     } finally {
-      if (previousBinary === undefined) delete process.env.TRACEVEIL_BIN;
-      else process.env.TRACEVEIL_BIN = previousBinary;
+      process.env = previousEnv;
     }
   });
 }
