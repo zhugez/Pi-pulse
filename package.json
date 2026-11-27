@@ -66,6 +66,7 @@
       "./extensions/ponytail/index.ts",
       "./extensions/goal/goal.ts",
       "./extensions/todo/index.ts",
+      "./extensions/session-handoff/index.ts",
       "./extensions/advisor/extensions/index.ts",
       "./extensions/nomad/index.ts"
     ],
