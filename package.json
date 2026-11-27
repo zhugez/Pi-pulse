@@ -49,6 +49,7 @@
       "./extensions/comment-checker/index.ts",
       "./extensions/crap/index.ts",
       "./extensions/mutator/index.ts",
+      "./extensions/invar/index.ts",
       "./extensions/lens/index.ts",
       "./extensions/code-mode/index.ts",
       "./extensions/codex-pool/index.ts",
@@ -76,7 +77,7 @@
   "license": "GPL-3.0-only",
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.0",
-    "@earendil-works/pi-coding-agent": ">=0.80.0",
+    "@earendil-works/pi-coding-agent": ">=0.87.0",
     "@earendil-works/pi-tui": ">=0.80.0",
     "typebox": "*"
   },

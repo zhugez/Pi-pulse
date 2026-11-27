@@ -75,3 +75,12 @@ MIT License. The source is copied verbatim apart from import extensions
 
 It shells out to @code-yeongyu/comment-checker (MIT), a native tree-sitter
 binary distributed through optionalDependencies.
+
+The Invar extension (extensions/invar/index.ts) is adapted from the Invar
+Pi adapter (integrations/pi/invar.ts):
+https://github.com/zhugez/invar
+
+Distributed under Apache-2.0. The license is retained at
+extensions/invar/LICENSE. Changes include repository formatting, first-launch
+setup offers, and persisted per-project opt-out choices.
+The Invar CLI is installed separately and is not bundled in this package.

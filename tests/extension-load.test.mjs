@@ -6,6 +6,29 @@ import { join } from "node:path";
 import { fileURLToPath } from 'node:url';
 import test from "node:test";
 
+test('Invar loads through Pi without local SDK dependencies or an installed Invar binary', () => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'pi-pulse-invar-load-'));
+  try {
+    const extension = join(agentDir, 'invar.ts');
+    cpSync(new URL('../extensions/invar/index.ts', import.meta.url), extension);
+    const result = spawnSync(process.env.PI_BIN ?? 'pi', [
+      '--offline', '--mode', 'rpc', '--no-session', '-ne', '-e', extension,
+    ], {
+      cwd: agentDir,
+      env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_AGENT_DIR: agentDir, PI_OFFLINE: '1', INVAR_BIN: join(agentDir, 'missing-invar') },
+      input: '{"id":"startup","type":"get_commands"}\n',
+      encoding: 'utf8',
+      timeout: 20_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /Failed to load extension|Cannot find module/);
+    assert.match(result.stdout, /"name":"invar"/);
+  } finally {
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
 test('Antigravity Pool respects native logout and migrates only on command', () => {
   const home = mkdtempSync(join(tmpdir(), 'pi-pulse-antigravity-upgrade-'));
   try {
