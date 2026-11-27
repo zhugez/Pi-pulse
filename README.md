@@ -8,6 +8,7 @@ An evolving workshop for building sharp, lightweight extensions for the [Pi Codi
 
 The collection currently includes two observability extensions, integrated model providers, and a coding-discipline mode:
 
+- **Traceveil (`/traceveil`)** — inspect the current saved Pi branch for repeated tool failures, possible loops and repeated reads. Runs locally when requested.
 - **Loop guard** — blocks byte-identical tool calls before they grind, with an actionable reason instead of a silent repeat.
 - **Mutation gate** — `/mutator` finds behavior no test checks, via [unclebob/mutator](https://github.com/unclebob/mutator).
 - **Invar** — `/invar setup` captures commands for your review, then checks exit code, stdout, and stderr against the approved baseline.
@@ -32,6 +33,20 @@ The collection currently includes two observability extensions, integrated model
 - **Advisor** — an on-demand second opinion through `ask_advisor` and configurable review gates, on a separate model.
 
 ## Extension catalog
+
+### Traceveil (`/traceveil`)
+
+```text
+/traceveil demo       # synthetic demo, no session required
+/traceveil            # current saved session and selected branch
+/traceveil doctor     # adapter coverage and privacy guidance
+```
+
+Requires the standalone [Traceveil CLI](https://github.com/zhugez/traceveil), version 0.2 or newer, at `~/.local/bin/traceveil`. Set `TRACEVEIL_BIN` to an absolute executable path for another installation. Capsule installs the pinned Linux/WSL x86_64 build on supported glibc systems. Pulse itself never downloads a CLI.
+
+Reports open in a Pi dialog. Edits in that dialog are discarded. The command adds no report to model context or session history and runs no background hooks. It reads only the current saved file and selected leaf. Unsaved sessions and changed branches require another explicit request. Runs stop after 30 seconds or when either output stream exceeds 256 KiB.
+
+For finding details, run the complete CLI inspection command printed in the report. Its source, leaf and rule options preserve the reference. Findings describe recorded patterns rather than proven causes. Nested Code Mode telemetry can remain partial. The bundled `/skill:traceveil` guides agent-requested CLI analysis; those tool results enter the requesting agent's context.
 
 ### Loop guard
 

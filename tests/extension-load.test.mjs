@@ -6,6 +6,31 @@ import { join } from "node:path";
 import { fileURLToPath } from 'node:url';
 import test from "node:test";
 
+test('Traceveil command and skill load through Pi without an installed Traceveil binary', () => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'pi-pulse-traceveil-load-'));
+  try {
+    const extension = join(agentDir, 'traceveil.ts');
+    cpSync(new URL('../extensions/traceveil/index.ts', import.meta.url), extension);
+    const skill = fileURLToPath(new URL('../skills/traceveil/SKILL.md', import.meta.url));
+    const result = spawnSync(process.env.PI_BIN ?? 'pi', [
+      '--offline', '--mode', 'rpc', '--no-session', '-ne', '-e', extension, '--no-skills', '--skill', skill,
+    ], {
+      cwd: agentDir,
+      env: { ...process.env, HOME: agentDir, USERPROFILE: agentDir, PI_CODING_AGENT_DIR: agentDir, PI_AGENT_DIR: agentDir, PI_OFFLINE: '1', TRACEVEIL_BIN: join(agentDir, 'missing-traceveil') },
+      input: '{"id":"startup","type":"get_commands"}\n', encoding: 'utf8', timeout: 20_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const response = result.stdout.trim().split('\n').map(line => JSON.parse(line)).find(item => item.command === 'get_commands');
+    assert.ok(response?.success, result.stderr);
+    const names = response.data.commands.map(command => command.name);
+    assert.ok(names.includes('traceveil'));
+    assert.ok(names.includes('skill:traceveil'));
+  } finally {
+    rmSync(agentDir, { recursive: true, force: true });
+  }
+});
+
 test('Invar loads through Pi without local SDK dependencies or an installed Invar binary', () => {
   const agentDir = mkdtempSync(join(tmpdir(), 'pi-pulse-invar-load-'));
   try {
