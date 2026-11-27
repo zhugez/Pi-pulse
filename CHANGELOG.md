@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add the on-demand `/traceveil` command for the current saved Pi branch, a synthetic demo and adapter guidance. Native CLI execution has time/output limits and reports remain in the UI.
+- Bundle the Traceveil skill for explicitly authorized session diagnostics.
+
 ## [1.1.0] - 2026-11-02
 
 ### Changed
