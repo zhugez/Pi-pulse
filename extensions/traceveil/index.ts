@@ -65,8 +65,11 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
       });
       let progress: Promise<void> | undefined;
       try {
-        progress = ui.select('Traceveil is running (Escape cancels)', ['Cancel'], { signal: dialog.signal })
-          .then(() => { if (!dialog.signal.aborted) controller.abort(); });
+        progress = ui
+          .select('Traceveil is running (Escape cancels)', ['Cancel'], { signal: dialog.signal })
+          .then(() => {
+            if (!dialog.signal.aborted) controller.abort();
+          });
         const result = await execute(binary, argv, {
           cwd: ctx.cwd,
           encoding: 'utf8',
@@ -90,10 +93,13 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
         if (sessionFile && leaf) {
           const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
           let completed = false;
-          report = report.replace(/^([ \t]*)traceveil inspect (.+?) SESSION(.*)$/gm, (_line, indent, reference, policy) => {
-            completed = true;
-            return `${indent}${quote(binary)} inspect ${reference} ${quote(sessionFile)}${policy} --leaf ${quote(leaf)}`;
-          });
+          report = report.replace(
+            /^([ \t]*)traceveil inspect (.+?) SESSION(.*)$/gm,
+            (_line, indent, reference, policy) => {
+              completed = true;
+              return `${indent}${quote(binary)} inspect ${reference} ${quote(sessionFile)}${policy} --leaf ${quote(leaf)}`;
+            },
+          );
           if (completed) {
             report = report
               .replace('Inspection template (join wrapped lines):', 'Inspection command:')
