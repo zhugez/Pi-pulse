@@ -53,7 +53,20 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
         ctx.ui.notify('TRACEVEIL_BIN must be an absolute executable path.', 'error');
         return;
       }
+      const controller = new AbortController();
+      const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+      const dialog = new AbortController();
+      const ui = ctx.ui;
+      let replaced = false;
+      const unsubscribe = pi.on('session_shutdown', () => {
+        replaced = true;
+        controller.abort();
+        dialog.abort();
+      });
+      let progress: Promise<void> | undefined;
       try {
+        progress = ui.select('Traceveil is running (Escape cancels)', ['Cancel'], { signal: dialog.signal })
+          .then(() => { if (!dialog.signal.aborted) controller.abort(); });
         const result = await execute(binary, argv, {
           cwd: ctx.cwd,
           encoding: 'utf8',
@@ -61,8 +74,11 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
           maxBuffer: 256 * 1024,
           killSignal: 'SIGKILL',
           windowsHide: true,
-          signal: ctx.signal,
+          signal,
         });
+        dialog.abort();
+        await progress;
+        if (replaced || signal.aborted) return;
         if (!unchanged()) {
           ctx.ui.notify(
             'The Pi branch changed while Traceveil ran. Run /traceveil again for the selected branch.',
@@ -70,14 +86,30 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
           );
           return;
         }
-        const report = stripVTControlCharacters(result.stdout).trim();
+        let report = stripVTControlCharacters(result.stdout).trim();
+        if (sessionFile && leaf) {
+          const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+          let completed = false;
+          report = report.replace(/^([ \t]*)traceveil inspect (.+?) SESSION(.*)$/gm, (_line, indent, reference, policy) => {
+            completed = true;
+            return `${indent}${quote(binary)} inspect ${reference} ${quote(sessionFile)}${policy} --leaf ${quote(leaf)}`;
+          });
+          if (completed) {
+            report = report
+              .replace('Inspection template (join wrapped lines):', 'Inspection command:')
+              .replace(/^[ \t]*Replace SESSION with the exact file, or --stdin with the same bytes\.\n?/m, '')
+              .replace(/^[ \t]*Repeat --leaf ID if one was selected\. Policy above is pinned\.\n?/m, '');
+          }
+        }
         if (!report) {
           ctx.ui.notify('Traceveil returned no report. Check that the CLI is version 0.2 or newer.', 'warning');
           return;
         }
         await ctx.ui.editor('Traceveil report (edits are discarded)', report);
       } catch (error) {
-        if (!unchanged()) return;
+        dialog.abort();
+        await progress;
+        if (replaced || !unchanged()) return;
         const failure = error as NodeJS.ErrnoException & { killed?: boolean; stdout?: string; stderr?: string };
         if (failure.code === 'ENOENT') {
           ctx.ui.notify(
@@ -85,6 +117,7 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
             'warning',
           );
         } else if (
+          signal.aborted ||
           failure.killed ||
           failure.code === 'ABORT_ERR' ||
           failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
@@ -100,6 +133,9 @@ export default function registerTraceveil(pi: ExtensionAPI, execute: Execute = e
             message || 'Unable to run Traceveil. Check its installation and permissions.',
           );
         }
+      } finally {
+        dialog.abort();
+        unsubscribe();
       }
     },
   });

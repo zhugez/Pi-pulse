@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 
@@ -17,10 +21,12 @@ function harness(execute?: Execute) {
     reads: 0,
   };
   const controller = new AbortController();
+  const events = new Map<string, () => void>();
+  let cancelProgress: (() => void) | undefined;
   const ctx = {
     cwd: '/project with spaces',
     hasUI: true,
-    signal: controller.signal,
+    signal: controller.signal as AbortSignal | undefined,
     sessionManager: {
       getSessionFile: () => {
         state.reads++;
@@ -32,6 +38,12 @@ function harness(execute?: Execute) {
       },
     },
     ui: {
+      select: (_title: string, _options: string[], options: { signal: AbortSignal }) =>
+        new Promise<undefined>((resolve) => {
+          cancelProgress = () => resolve(undefined);
+          options.signal.addEventListener('abort', cancelProgress, { once: true });
+          if (options.signal.aborted) cancelProgress();
+        }),
       notify: (message: string, level: string) => {
         notices.push([message, level]);
       },
@@ -43,6 +55,10 @@ function harness(execute?: Execute) {
   };
   registerTraceveil(
     {
+      on: (event: string, listener: () => void) => {
+        events.set(event, listener);
+        return () => events.delete(event);
+      },
       registerCommand: (name, command) => {
         commands.set(name, command);
       },
@@ -58,6 +74,11 @@ function harness(execute?: Execute) {
     state,
     ctx,
     controller,
+    events,
+    cancel: () => {
+      assert.ok(cancelProgress, 'A progress dialog must expose idle cancellation');
+      cancelProgress();
+    },
     calls,
     reports,
     notices,
@@ -87,7 +108,10 @@ test('Traceveil is on demand, uses literal current-source/current-leaf arguments
   assert.equal(options.timeout, 30_000);
   assert.equal(options.maxBuffer, 256 * 1024);
   assert.equal(options.killSignal, 'SIGKILL');
-  assert.equal(options.signal, h.controller.signal);
+  assert.equal(options.signal?.aborted, false);
+  h.controller.abort();
+  assert.equal(options.signal?.aborted, true);
+  assert.equal(h.events.size, 0);
   assert.equal(h.reports.length, 1);
   assert.equal(h.reports[0][1], 'report');
   assert.equal(h.notices.length, 0);
@@ -131,6 +155,13 @@ test('Traceveil discards stale, cancelled and incomplete output and keeps failur
   await changed.run();
   assert.equal(changed.reports.length, 0);
   assert.match(changed.notices[0][0], /branch changed/);
+  const changedFailure = harness(async () => {
+    changedFailure.state.leaf = 'another-branch';
+    throw { code: 2, stderr: 'old branch failure' };
+  });
+  await changedFailure.run();
+  assert.equal(changedFailure.reports.length, 0);
+  assert.equal(changedFailure.notices.length, 0);
   for (const failure of [
     { code: 'ENOENT' },
     { code: 'ABORT_ERR' },
@@ -143,6 +174,7 @@ test('Traceveil discards stale, cancelled and incomplete output and keeps failur
     await h.run();
     assert.equal(h.reports.length, 0);
     assert.equal(h.notices.length, 1);
+    assert.equal(h.events.size, 0);
     assert.doesNotMatch(h.notices[0][0], /private incomplete/);
   }
   const failure = harness(async () => {
@@ -155,4 +187,98 @@ test('Traceveil discards stale, cancelled and incomplete output and keeps failur
   await empty.run();
   assert.equal(empty.reports.length, 0);
   assert.match(empty.notices[0][0], /no report/);
+});
+
+test('Traceveil cancels idle commands and discards late successful output', async () => {
+  let finish!: (result: { stdout: string; stderr: string }) => void;
+  const h = harness(() => new Promise((resolve) => { finish = resolve; }));
+  h.ctx.signal = undefined;
+  const running = h.run('demo');
+  h.cancel();
+  await Promise.resolve();
+  assert.equal(h.calls[0][2].signal?.aborted, true);
+  finish({ stdout: 'late report', stderr: '' });
+  await running;
+  assert.equal(h.reports.length, 0);
+  assert.equal(h.events.size, 0);
+});
+
+test('Traceveil idle cancellation terminates the native subprocess without displaying output', async () => {
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => { ready = resolve; });
+  let child: ReturnType<typeof execFile> | undefined;
+  const h = harness(async (_binary, _args, options) => {
+    const execution = promisify(execFile)(process.execPath, ['-e', 'process.stdout.write("ready"); setInterval(() => {}, 1000);'], options);
+    child = execution.child;
+    child.stdout!.once('data', ready);
+    return execution;
+  });
+  h.ctx.cwd = process.cwd();
+  h.ctx.signal = undefined;
+  const running = h.run('demo');
+  try {
+    await started;
+    const exited = new Promise<void>((resolve) => child!.once('exit', () => resolve()));
+    h.cancel();
+    await running;
+    await exited;
+    assert.equal(h.reports.length, 0);
+    assert.match(h.notices[0][0], /cancellation/);
+    assert.equal(h.events.size, 0);
+  } finally {
+    child?.kill('SIGKILL');
+  }
+});
+
+test('Traceveil suppresses stale context access on session replacement for success and failure', async () => {
+  for (const fails of [false, true]) {
+    let finish!: () => void;
+    let stale = false;
+    const h = harness(() => new Promise((resolve, reject) => {
+      finish = () => fails ? reject({ code: 2 }) : resolve({ stdout: 'old report', stderr: '' });
+    }));
+    const manager = h.ctx.sessionManager;
+    Object.defineProperty(h.ctx, 'sessionManager', { get() {
+      assert.equal(stale, false, 'The replaced context must not be queried');
+      return manager;
+    } });
+    const running = h.run();
+    h.events.get('session_shutdown')?.();
+    stale = true;
+    finish();
+    await running;
+    assert.equal(h.calls[0][2].signal?.aborted, true);
+    assert.equal(h.reports.length, 0);
+    assert.equal(h.notices.length, 0);
+    assert.equal(h.events.size, 0);
+  }
+});
+
+test('Traceveil emits a runnable inspection command preserving source, leaf and policy', { skip: process.platform === 'win32' }, async () => {
+  const directory = mkdtempSync(join(process.cwd(), '.traceveil-command-'));
+  const previousBinary = process.env.TRACEVEIL_BIN;
+  try {
+    const binary = join(directory, "traceveil 'literal");
+    writeFileSync(binary, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o755 });
+    process.env.TRACEVEIL_BIN = binary;
+    const h = harness(async () => ({
+      stdout: `Inspection template (join wrapped lines):\n  traceveil inspect '@scope:f001' SESSION --agent pi --rule-threshold READ001=4\n  Replace SESSION with the exact file, or --stdin with the same bytes.\n  Repeat --leaf ID if one was selected. Policy above is pinned.`,
+      stderr: '',
+    }));
+    h.state.file = join(directory, "session 'quote;literal.jsonl");
+    h.state.leaf = "leaf 'literal";
+    await h.run();
+    const report = h.reports[0][1];
+    const command = report.split('\n').find((line) => line.includes(' inspect '));
+    assert.ok(command);
+    const result = await promisify(execFile)('/bin/sh', ['-c', command]);
+    assert.deepEqual(JSON.parse(result.stdout), [
+      'inspect', '@scope:f001', h.state.file, '--agent', 'pi', '--rule-threshold', 'READ001=4', '--leaf', h.state.leaf,
+    ]);
+    assert.doesNotMatch(report, /SESSION|Repeat --leaf/);
+  } finally {
+    if (previousBinary === undefined) delete process.env.TRACEVEIL_BIN;
+    else process.env.TRACEVEIL_BIN = previousBinary;
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
